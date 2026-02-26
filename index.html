@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="CapFlow — Sistema ERP Industrial para fábrica de inyección plástica">
+  <title>CapFlow ERP</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <div id="app">
+
+    <!-- ══ Sidebar Navigation ══════════════════════════════════ -->
+    <nav class="sidebar" id="sidebar" aria-label="Navegación principal">
+
+      <!-- Logo -->
+      <div class="sidebar__logo">
+        <div class="sidebar__logo-mark" aria-hidden="true"></div>
+        <div>
+          <span class="sidebar__logo-text">CapFlow</span>
+          <span class="sidebar__logo-sub">Sistema ERP</span>
+        </div>
+      </div>
+
+      <!-- Nav links — populated by app.js router -->
+      <div class="sidebar__nav" id="sidebar-nav">
+
+        <span class="sidebar__section-label">Principal</span>
+        <a class="sidebar__link" data-route="dashboard" href="#dashboard" aria-current="false">
+          <span class="sidebar__link-icon">⊞</span> Dashboard
+        </a>
+
+        <span class="sidebar__section-label">Catálogo</span>
+        <a class="sidebar__link" data-route="products" href="#products" aria-current="false">
+          <span class="sidebar__link-icon">◈</span> Productos
+        </a>
+        <a class="sidebar__link" data-route="machines" href="#machines" aria-current="false">
+          <span class="sidebar__link-icon">⚙</span> Máquinas
+        </a>
+
+        <span class="sidebar__section-label">Operaciones</span>
+        <a class="sidebar__link" data-route="production" href="#production" aria-current="false">
+          <span class="sidebar__link-icon">⬡</span> Producción
+        </a>
+        <a class="sidebar__link" data-route="clients" href="#clients" aria-current="false">
+          <span class="sidebar__link-icon">◉</span> Clientes
+        </a>
+        <a class="sidebar__link" data-route="invoicing" href="#invoicing" aria-current="false">
+          <span class="sidebar__link-icon">▤</span> Facturación
+        </a>
+
+        <span class="sidebar__section-label">Administración</span>
+        <a class="sidebar__link" data-route="payroll" href="#payroll" aria-current="false">
+          <span class="sidebar__link-icon">◎</span> Nómina
+        </a>
+        <a class="sidebar__link" data-route="investor" href="#investor" aria-current="false">
+          <span class="sidebar__link-icon">◇</span> Inversionista
+        </a>
+
+      </div>
+    </nav>
+
+    <!-- ══ Main Content Area ════════════════════════════════════ -->
+    <main class="main-content" id="main-content" role="main" aria-live="polite">
+      <!-- Module views are injected here by the router -->
+      <div id="view-container"></div>
+    </main>
+
+  </div>
+
+  <!-- App entry point (module type enables ES module imports) -->
+  <script type="module" src="js/app.js"></script>
+
+</body>
+</html>
