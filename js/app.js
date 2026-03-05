@@ -21,7 +21,8 @@ const ROUTES = {
   dashboard: {
     title: 'Dashboard — CapFlow',
     loader: async (container) => {
-      container.innerHTML = buildPlaceholder('Dashboard', '⊞', 'Resumen general del sistema.');
+      const { mountDashboard } = await import('./modules/dashboard.js');
+      await mountDashboard(container);
     },
   },
 
@@ -36,42 +37,72 @@ const ROUTES = {
   machines: {
     title: 'Máquinas — CapFlow',
     loader: async (container) => {
-      container.innerHTML = buildPlaceholder('Máquinas', '⚙', 'Módulo de máquinas próximamente.');
+      const { mountMachines } = await import('./modules/machines.js');
+      mountMachines(container);
     },
   },
 
   production: {
     title: 'Producción — CapFlow',
     loader: async (container) => {
-      container.innerHTML = buildPlaceholder('Producción', '⬡', 'Módulo de producción próximamente.');
+      const { mountProduction } = await import('./modules/production.js');
+      await mountProduction(container);
+    },
+  },
+
+  operators: {
+    title: 'Operarios — CapFlow',
+    loader: async (container) => {
+      const { mountOperators } = await import('./modules/operators.js');
+      mountOperators(container);
+    },
+  },
+
+  'raw-materials': {
+    title: 'Materia Prima — CapFlow',
+    loader: async (container) => {
+      const { mountRawMaterials } = await import('./modules/rawMaterials.js');
+      await mountRawMaterials(container);
     },
   },
 
   clients: {
     title: 'Clientes — CapFlow',
     loader: async (container) => {
-      container.innerHTML = buildPlaceholder('Clientes', '◉', 'Módulo de clientes próximamente.');
+      const { mountCustomers } = await import('./modules/customers.js');
+      await mountCustomers(container);
     },
   },
 
   invoicing: {
     title: 'Facturación — CapFlow',
     loader: async (container) => {
-      container.innerHTML = buildPlaceholder('Facturación', '▤', 'Módulo de facturación próximamente.');
+      const { mountSales } = await import('./modules/sales.js');
+      await mountSales(container);
+    },
+  },
+
+  inventory: {
+    title: 'Inventario — CapFlow',
+    loader: async (container) => {
+      const { mountInventory } = await import('./modules/inventory.js');
+      await mountInventory(container);
     },
   },
 
   payroll: {
     title: 'Nómina — CapFlow',
     loader: async (container) => {
-      container.innerHTML = buildPlaceholder('Nómina', '◎', 'Módulo de nómina próximamente.');
+      const { mountPayroll } = await import('./modules/payroll.js');
+      await mountPayroll(container);
     },
   },
 
   investor: {
     title: 'Inversionista — CapFlow',
     loader: async (container) => {
-      container.innerHTML = buildPlaceholder('Inversionista', '◇', 'Módulo de inversionista próximamente.');
+      const { mountInvestor } = await import('./modules/investor.js');
+      await mountInvestor(container);
     },
   },
 };

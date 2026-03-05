@@ -43,8 +43,17 @@
         <a class="sidebar__link" data-route="production" href="#production" aria-current="false">
           <span class="sidebar__link-icon">⬡</span> Producción
         </a>
+        <a class="sidebar__link" data-route="raw-materials" href="#raw-materials" aria-current="false">
+          <span class="sidebar__link-icon">⬢</span> Materia Prima
+        </a>
+        <a class="sidebar__link" data-route="operators" href="#operators" aria-current="false">
+          <span class="sidebar__link-icon">◈</span> Operarios
+        </a>
         <a class="sidebar__link" data-route="clients" href="#clients" aria-current="false">
           <span class="sidebar__link-icon">◉</span> Clientes
+        </a>
+        <a class="sidebar__link" data-route="inventory" href="#inventory" aria-current="false">
+          <span class="sidebar__link-icon">▦</span> Inventario
         </a>
         <a class="sidebar__link" data-route="invoicing" href="#invoicing" aria-current="false">
           <span class="sidebar__link-icon">▤</span> Facturación
@@ -68,6 +77,12 @@
     </main>
 
   </div>
+
+  <!-- Global toast container — filled by showToast() in any module -->
+  <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- Chart.js — loaded via CDN, available as window.Chart -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
   <!-- App entry point (module type enables ES module imports) -->
   <script type="module" src="js/app.js"></script>
