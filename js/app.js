@@ -105,6 +105,14 @@ const ROUTES = {
       await mountInvestor(container);
     },
   },
+
+  reports: {
+    title: 'Reportes — CapFlow',
+    loader: async (container) => {
+      const { mountReports } = await import('./modules/reports.js');
+      await mountReports(container);
+    },
+  },
 };
 
 /** Default route if hash is missing or unknown. */
