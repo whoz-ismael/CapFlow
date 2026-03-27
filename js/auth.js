@@ -170,6 +170,54 @@ export function mountLogoutButton(onLogout) {
   const sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
 
+  // Inject logout styles independently — cannot rely on _injectLoginStyles()
+  // being called first (it only runs when the login screen is shown).
+  if (!document.getElementById('logout-styles')) {
+    const s = document.createElement('style');
+    s.id = 'logout-styles';
+    s.textContent = `
+      .sidebar__logout {
+        position:    sticky;
+        bottom:      0;
+        background:  var(--color-bg-surface);
+        border-top:  1px solid var(--color-border);
+        padding:     var(--space-sm) 0;
+        flex-shrink: 0;
+      }
+      .sidebar__logout-btn {
+        width:          100%;
+        display:        flex;
+        align-items:    center;
+        gap:            var(--space-sm);
+        padding:        10px var(--space-md);
+        background:     none;
+        border:         none;
+        border-left:    3px solid transparent;
+        color:          var(--color-text-secondary);
+        font-family:    var(--font-display);
+        font-weight:    500;
+        font-size:      0.95rem;
+        letter-spacing: 0.02em;
+        cursor:         pointer;
+        transition:     background var(--transition-fast), color var(--transition-fast),
+                        border-left var(--transition-fast);
+        text-align:     left;
+      }
+      .sidebar__logout-btn:hover {
+        background:  var(--color-bg-hover);
+        color:       var(--color-danger, #e53e3e);
+        border-left: 3px solid var(--color-danger, #e53e3e);
+      }
+      .sidebar__logout-icon {
+        font-size:  1rem;
+        width:      20px;
+        text-align: center;
+        flex-shrink: 0;
+      }
+    `;
+    document.head.appendChild(s);
+  }
+
   const footer = document.createElement('div');
   footer.className = 'sidebar__logout';
   footer.innerHTML = `
