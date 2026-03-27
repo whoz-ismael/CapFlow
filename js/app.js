@@ -2,21 +2,21 @@
  * app.js — CapFlow Application Router & Module Loader
  *
  * Handles:
+ *  - Authentication gate (Supabase session check on boot)
  *  - Hash-based client-side routing (#products, #dashboard, etc.)
  *  - Lazy-loading module scripts on demand
  *  - Sidebar active-link state
  *
  * To add a new module:
  *  1. Register it in ROUTES below.
- *  2. Create its file under /js/modules/<name>.js
- *  3. Export a mount<Name>(container) function from that file.
+ *  2. Create its file under /js/modules/<n>.js
+ *  3. Export a mount<n>(container) function from that file.
  */
 
+import { AuthAPI, mountLoginScreen, mountLogoutButton } from './auth.js';
+
 // ─── Route Registry ───────────────────────────────────────────
-/**
- * Each route maps a hash key → { loader, title }
- * loader: async function that returns the module and calls its mount fn.
- */
+
 const ROUTES = {
   dashboard: {
     title: 'Dashboard — CapFlow',
@@ -123,12 +123,10 @@ const ROUTES = {
   },
 };
 
-/** Default route if hash is missing or unknown. */
 const DEFAULT_ROUTE = 'dashboard';
 
 // ─── Router ───────────────────────────────────────────────────
 
-/** Navigate to the route matching the current URL hash. */
 async function navigate() {
   const hash  = window.location.hash.replace('#', '') || DEFAULT_ROUTE;
   const route = ROUTES[hash] || ROUTES[DEFAULT_ROUTE];
@@ -136,7 +134,6 @@ async function navigate() {
   const container = document.getElementById('view-container');
   if (!container) return;
 
-  // Show a brief loading state
   container.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:center;height:40vh;gap:12px;color:var(--color-text-muted);">
       <div class="spinner"></div>
@@ -144,13 +141,9 @@ async function navigate() {
     </div>
   `;
 
-  // Update page title
   document.title = route.title;
-
-  // Highlight active sidebar link
   setActiveLink(hash);
 
-  // Load and mount the module
   try {
     await route.loader(container);
   } catch (err) {
@@ -163,7 +156,6 @@ async function navigate() {
   }
 }
 
-/** Update sidebar link aria-current and CSS class. */
 function setActiveLink(activeRoute) {
   document.querySelectorAll('.sidebar__link[data-route]').forEach(link => {
     const isActive = link.dataset.route === activeRoute;
@@ -174,10 +166,6 @@ function setActiveLink(activeRoute) {
 
 // ─── Placeholder Builder ──────────────────────────────────────
 
-/**
- * Returns HTML for a "coming soon" placeholder module view.
- * Used for modules not yet implemented.
- */
 function buildPlaceholder(name, icon, subtitle) {
   return `
     <section class="module">
@@ -200,6 +188,47 @@ function buildPlaceholder(name, icon, subtitle) {
 
 // ─── Boot ─────────────────────────────────────────────────────
 
-/** Listen for hash changes and route on initial load. */
-window.addEventListener('hashchange', navigate);
-window.addEventListener('DOMContentLoaded', navigate);
+/**
+ * Start the authenticated app: wire up the router and logout button.
+ * Called after a confirmed valid session.
+ */
+function bootApp() {
+  // Restore the full #app shell in case it was replaced by the login screen
+  const app = document.getElementById('app');
+  if (!document.getElementById('sidebar')) {
+    // The login screen replaced #app contents — reload to restore HTML shell
+    window.location.reload();
+    return;
+  }
+
+  mountLogoutButton(() => {
+    // On logout: reload the page — boot() will detect no session and show login
+    window.location.reload();
+  });
+
+  window.addEventListener('hashchange', navigate);
+  navigate();
+}
+
+/**
+ * Boot sequence:
+ *  1. Check for an existing Supabase session.
+ *  2a. Session found → start the app immediately.
+ *  2b. No session    → show the login screen, then start the app on success.
+ */
+async function boot() {
+  const session = await AuthAPI.getSession();
+
+  if (session) {
+    bootApp();
+  } else {
+    mountLoginScreen(() => {
+      // After successful login the page HTML has been replaced by the login
+      // screen, so the cleanest recovery is a full reload — the session cookie
+      // is now set and boot() will take the session branch.
+      window.location.reload();
+    });
+  }
+}
+
+window.addEventListener('DOMContentLoaded', boot);
