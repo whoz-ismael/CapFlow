@@ -106,6 +106,14 @@ const ROUTES = {
     },
   },
 
+  expenses: {
+    title: 'Gastos — CapFlow',
+    loader: async (container) => {
+      const { mountExpenses } = await import('./modules/expenses.js');
+      await mountExpenses(container);
+    },
+  },
+
   reports: {
     title: 'Reportes — CapFlow',
     loader: async (container) => {

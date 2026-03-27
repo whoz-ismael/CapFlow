@@ -1498,9 +1498,9 @@ export const PayrollAPI = {
 // EXPENSES
 //
 // DB: id, expense_date, category, description, amount, method, notes,
-//     created_at, updated_at
+//     attachments (jsonb), created_at, updated_at
 // JS: id, expenseDate,  category, description, amount, method, notes,
-//     createdAt, updatedAt
+//     attachments, createdAt, updatedAt
 // =============================================================================
 
 function _expenseFromDb(r) {
@@ -1512,6 +1512,7 @@ function _expenseFromDb(r) {
     amount:      Number(r.amount),
     method:      r.method,
     notes:       r.notes,
+    attachments: Array.isArray(r.attachments) ? r.attachments : [],
     createdAt:   r.created_at,
     updatedAt:   r.updated_at,
   };
@@ -1524,6 +1525,13 @@ export const ExpensesAPI = {
     return (data || []).map(_expenseFromDb);
   },
 
+  async getById(id) {
+    const { data, error } = await _sb.from('expenses').select('*')
+      .eq('id', String(id)).maybeSingle();
+    if (error) throw new Error(error.message);
+    return data ? _expenseFromDb(data) : null;
+  },
+
   async create(d) {
     const now = new Date().toISOString();
     const row = {
@@ -1534,6 +1542,7 @@ export const ExpensesAPI = {
       amount:       Number(d.amount) || 0,
       method:       d.method || '',
       notes:        d.notes || '',
+      attachments:  Array.isArray(d.attachments) ? d.attachments : [],
       created_at:   now,
       updated_at:   now,
     };
@@ -1550,6 +1559,7 @@ export const ExpensesAPI = {
     if (d.amount       !== undefined) u.amount       = Number(d.amount) || 0;
     if (d.method       !== undefined) u.method       = d.method;
     if (d.notes        !== undefined) u.notes        = d.notes;
+    if (d.attachments  !== undefined) u.attachments  = d.attachments;
     const { data, error } = await _sb.from('expenses').update(u)
       .eq('id', String(id)).select().single();
     if (error) throw new Error(error.message);
