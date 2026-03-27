@@ -54,11 +54,10 @@ const INVESTOR_PAYDOWN_PER_PKG = 100;
 
 /** Payment methods available in the AR form. */
 const PAYMENT_METHODS = [
-  { value: 'cash',         label: 'Efectivo' },
-  { value: 'transfer',     label: 'Transferencia' },
-  { value: 'check',        label: 'Cheque' },
-  { value: 'card',         label: 'Tarjeta' },
-  { value: 'other',        label: 'Otro' },
+  { value: 'efectivo',      label: 'Efectivo' },
+  { value: 'transferencia', label: 'Transferencia' },
+  { value: 'cheque',        label: 'Cheque' },
+  { value: 'otro',          label: 'Otro' },
 ];
 
 // ─── Module State ─────────────────────────────────────────────────────────────
