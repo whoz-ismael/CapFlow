@@ -16,28 +16,25 @@
 const SUPABASE_URL      = 'https://cyzrxztodzivbxrivkot.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN5enJ4enRvZHppdmJ4cml2a290Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE3NjgwODAsImV4cCI6MjA4NzM0NDA4MH0.Ij3BFNwQiMYNVeBOYJ8T5knswO2pJWOp6Z51IiJ3mYg';
 
-// Reuse the same client instance created by api.js if already available,
-// otherwise create one. Both share the same localStorage session token.
-function _client() {
-  return window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-}
+// Single shared instance — prevents the "Multiple GoTrueClient instances" warning.
+const _client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ─── AuthAPI ──────────────────────────────────────────────────────────────────
 
 export const AuthAPI = {
   async getSession() {
-    const { data } = await _client().auth.getSession();
+    const { data } = await _client.auth.getSession();
     return data?.session ?? null;
   },
 
   async signIn(email, password) {
-    const { data, error } = await _client().auth.signInWithPassword({ email, password });
+    const { data, error } = await _client.auth.signInWithPassword({ email, password });
     if (error) throw new Error(error.message);
     return data.session;
   },
 
   async signOut() {
-    await _client().auth.signOut();
+    await _client.auth.signOut();
   },
 };
 
