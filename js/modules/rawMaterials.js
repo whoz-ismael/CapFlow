@@ -623,9 +623,81 @@ function renderMaterialBalance() {
   const openingRecycled = prevInv ? (prevInv.recycledClosingLbs || 0) : 0;
   const openingPellet   = prevInv ? (prevInv.pelletClosingLbs   || 0) : 0;
 
-  // ── Closing is current month's recorded inventory; default 0 if not entered ─
-  const closingRecycled = currInv ? (currInv.recycledClosingLbs || 0) : 0;
-  const closingPellet   = currInv ? (currInv.pelletClosingLbs   || 0) : 0;
+  // ── Gate: if closing inventory is not recorded yet, show pending state ─────
+  if (!currInv) {
+    balanceBody.innerHTML = `
+      <div class="rm-balance-grid">
+
+        <!-- Left column: partial data available -->
+        <div class="rm-balance-section">
+          <div class="rm-balance-section__title">Flujo de material</div>
+
+          <div class="rm-balance-row rm-balance-row--opening">
+            <span class="rm-balance-row__op">+</span>
+            <span class="rm-balance-row__label">Inventario inicial (lbs)</span>
+            <span class="rm-balance-row__value">${formatNumber(openingRecycled + openingPellet)}</span>
+          </div>
+          <div class="rm-balance-row rm-balance-row--detail">
+            <span class="rm-balance-row__op"></span>
+            <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Reciclado</span>
+            <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(openingRecycled)}</span>
+          </div>
+          <div class="rm-balance-row rm-balance-row--detail">
+            <span class="rm-balance-row__op"></span>
+            <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Pellet</span>
+            <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(openingPellet)}</span>
+          </div>
+
+          <div class="rm-balance-row rm-balance-row--purchase">
+            <span class="rm-balance-row__op">+</span>
+            <span class="rm-balance-row__label">Compras del mes (lbs)</span>
+            <span class="rm-balance-row__value">${formatNumber(purchasedRecycled + purchasedPellet)}</span>
+          </div>
+          <div class="rm-balance-row rm-balance-row--detail">
+            <span class="rm-balance-row__op"></span>
+            <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Reciclado</span>
+            <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(purchasedRecycled)}</span>
+          </div>
+          <div class="rm-balance-row rm-balance-row--detail">
+            <span class="rm-balance-row__op"></span>
+            <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Pellet</span>
+            <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(purchasedPellet)}</span>
+          </div>
+
+          <div class="rm-balance-row rm-balance-row--closing" style="opacity:0.4;">
+            <span class="rm-balance-row__op">\u2212</span>
+            <span class="rm-balance-row__label">Inventario de cierre (lbs)</span>
+            <span class="rm-balance-row__value">\u2014</span>
+          </div>
+
+          <div class="rm-balance-row rm-balance-row--total" style="opacity:0.4;">
+            <span class="rm-balance-row__op">=</span>
+            <span class="rm-balance-row__label">Consumo real (lbs)</span>
+            <span class="rm-balance-row__value">\u2014</span>
+          </div>
+        </div>
+
+        <!-- Right column: pending state -->
+        <div class="rm-balance-section">
+          <div class="rm-balance-section__title">An\u00e1lisis de desperdicio</div>
+          <div class="rm-balance-empty">
+            <span class="rm-balance-empty__icon">\u25a6</span>
+            <p>Cierre de inventario pendiente</p>
+            <p class="rm-balance-empty__sub">
+              Registra el inventario de cierre de ${escapeHTML(formatMonthLabel(selectedMonth))}
+              para calcular el consumo real y el desperdicio.
+            </p>
+          </div>
+        </div>
+
+      </div>
+    `;
+    return;
+  }
+
+  // ── Closing is current month's recorded inventory ──────────────────────────
+  const closingRecycled = currInv.recycledClosingLbs || 0;
+  const closingPellet   = currInv.pelletClosingLbs   || 0;
 
   // ── Real consumption ───────────────────────────────────────────────────────
   const consumedRecycled = openingRecycled + purchasedRecycled - closingRecycled;
@@ -668,12 +740,12 @@ function renderMaterialBalance() {
         </div>
         <div class="rm-balance-row rm-balance-row--detail">
           <span class="rm-balance-row__op"></span>
-          <span class="rm-balance-row__label rm-balance-row__label--sub">↳ Reciclado</span>
+          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Reciclado</span>
           <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(openingRecycled)}</span>
         </div>
         <div class="rm-balance-row rm-balance-row--detail">
           <span class="rm-balance-row__op"></span>
-          <span class="rm-balance-row__label rm-balance-row__label--sub">↳ Pellet</span>
+          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Pellet</span>
           <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(openingPellet)}</span>
         </div>
 
@@ -684,28 +756,28 @@ function renderMaterialBalance() {
         </div>
         <div class="rm-balance-row rm-balance-row--detail">
           <span class="rm-balance-row__op"></span>
-          <span class="rm-balance-row__label rm-balance-row__label--sub">↳ Reciclado</span>
+          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Reciclado</span>
           <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(purchasedRecycled)}</span>
         </div>
         <div class="rm-balance-row rm-balance-row--detail">
           <span class="rm-balance-row__op"></span>
-          <span class="rm-balance-row__label rm-balance-row__label--sub">↳ Pellet</span>
+          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Pellet</span>
           <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(purchasedPellet)}</span>
         </div>
 
         <div class="rm-balance-row rm-balance-row--closing">
-          <span class="rm-balance-row__op">−</span>
+          <span class="rm-balance-row__op">\u2212</span>
           <span class="rm-balance-row__label">Inventario de cierre (lbs)</span>
           <span class="rm-balance-row__value">${formatNumber(closingRecycled + closingPellet)}</span>
         </div>
         <div class="rm-balance-row rm-balance-row--detail">
           <span class="rm-balance-row__op"></span>
-          <span class="rm-balance-row__label rm-balance-row__label--sub">↳ Reciclado</span>
+          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Reciclado</span>
           <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(closingRecycled)}</span>
         </div>
         <div class="rm-balance-row rm-balance-row--detail">
           <span class="rm-balance-row__op"></span>
-          <span class="rm-balance-row__label rm-balance-row__label--sub">↳ Pellet</span>
+          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Pellet</span>
           <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(closingPellet)}</span>
         </div>
 
@@ -718,7 +790,7 @@ function renderMaterialBalance() {
 
       <!-- Right column: waste analysis -->
       <div class="rm-balance-section">
-        <div class="rm-balance-section__title">Análisis de desperdicio</div>
+        <div class="rm-balance-section__title">An\u00e1lisis de desperdicio</div>
 
         ${hasProduction ? `
           <div class="rm-balance-row">
@@ -727,8 +799,8 @@ function renderMaterialBalance() {
             <span class="rm-balance-row__value">${formatNumber(consumedTotal)}</span>
           </div>
           <div class="rm-balance-row">
-            <span class="rm-balance-row__op">−</span>
-            <span class="rm-balance-row__label">Uso teórico por producción (lbs)</span>
+            <span class="rm-balance-row__op">\u2212</span>
+            <span class="rm-balance-row__label">Uso te\u00f3rico por producci\u00f3n (lbs)</span>
             <span class="rm-balance-row__value">${formatNumber(theoreticalLbs)}</span>
           </div>
           <div class="rm-balance-row rm-balance-row--total">
@@ -745,10 +817,10 @@ function renderMaterialBalance() {
           </div>
         ` : `
           <div class="rm-balance-empty">
-            <span class="rm-balance-empty__icon">⬡</span>
-            <p>Sin producción en este mes</p>
+            <span class="rm-balance-empty__icon">\u2b21</span>
+            <p>Sin producci\u00f3n en este mes</p>
             <p class="rm-balance-empty__sub">
-              Registra producción para calcular el uso teórico y desperdicio.
+              Registra producci\u00f3n para calcular el uso te\u00f3rico y desperdicio.
             </p>
           </div>
         `}
