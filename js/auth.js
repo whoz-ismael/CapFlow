@@ -173,8 +173,10 @@ export function mountLogoutButton(onLogout) {
   const footer = document.createElement('div');
   footer.className = 'sidebar__logout';
   footer.innerHTML = `
-    <button class="sidebar__logout-btn" id="logout-btn" type="button">
-      <span>⎋</span> Cerrar sesión
+    <button class="sidebar__logout-btn" id="logout-btn" type="button"
+      title="Cerrar sesión">
+      <span class="sidebar__logout-icon" aria-hidden="true">⏻</span>
+      Cerrar sesión
     </button>
   `;
   sidebar.appendChild(footer);
@@ -363,31 +365,44 @@ function _injectLoginStyles() {
     .login-btn:active:not(:disabled) { transform: scale(0.98); }
     .login-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
-    /* ── Sidebar logout button ── */
+    /* ── Sidebar logout footer ── */
     .sidebar__logout {
-      padding: var(--space-md);
+      position:   sticky;
+      bottom:     0;
+      background: var(--color-bg-surface);
       border-top: 1px solid var(--color-border);
-      margin-top: auto;
+      padding:    var(--space-sm) var(--space-md);
+      flex-shrink: 0;
     }
     .sidebar__logout-btn {
-      width: 100%;
-      display: flex;
-      align-items: center;
-      gap: var(--space-sm);
-      padding: var(--space-sm) var(--space-md);
-      background: none;
-      border: 1px solid var(--color-border);
-      border-radius: var(--radius-sm);
-      color: var(--color-text-muted);
-      font-family: var(--font-display);
-      font-size: 0.85rem;
-      cursor: pointer;
-      transition: background .15s, color .15s, border-color .15s;
+      width:          100%;
+      display:        flex;
+      align-items:    center;
+      gap:            var(--space-sm);
+      padding:        10px var(--space-md);
+      background:     none;
+      border:         none;
+      border-left:    3px solid transparent;
+      color:          var(--color-text-secondary);
+      font-family:    var(--font-display);
+      font-weight:    500;
+      font-size:      0.95rem;
+      letter-spacing: 0.02em;
+      cursor:         pointer;
+      transition:     background var(--transition-fast), color var(--transition-fast),
+                      border-left var(--transition-fast);
+      text-align:     left;
     }
     .sidebar__logout-btn:hover {
-      background: color-mix(in srgb, var(--color-danger, #e53e3e) 10%, transparent);
-      color: var(--color-danger, #e53e3e);
-      border-color: color-mix(in srgb, var(--color-danger, #e53e3e) 40%, transparent);
+      background:  var(--color-bg-hover);
+      color:       var(--color-danger, #e53e3e);
+      border-left: 3px solid var(--color-danger, #e53e3e);
+    }
+    .sidebar__logout-icon {
+      font-size:  1rem;
+      width:      20px;
+      text-align: center;
+      flex-shrink: 0;
     }
   `;
   document.head.appendChild(tag);
