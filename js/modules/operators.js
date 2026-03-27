@@ -869,13 +869,10 @@ async function showOperatorProductionModal(operatorId) {
     // ── 3. Calculate totals ──────────────────────────────────────────────────
     const totalShifts   = records.length;
     const totalQuantity = records.reduce((sum, r) => sum + (r.quantity   || 0), 0);
-    const totalValue    = records.reduce((sum, r) => {
-      return sum + (r.quantity || 0) * (r.productPriceSnapshot || 0);
-    }, 0);
 
     // Remove loading overlay and replace with the real modal
     overlay.remove();
-    const modal = buildProductionModal(operator, records, totalShifts, totalQuantity, totalValue);
+    const modal = buildProductionModal(operator, records, totalShifts, totalQuantity);
     document.body.appendChild(modal);
 
     // ── 4. Close behaviour ───────────────────────────────────────────────────
@@ -935,10 +932,9 @@ function buildLoadingOverlay(operatorName) {
  * @param {Array}  records        - Production records filtered to this operator
  * @param {number} totalShifts
  * @param {number} totalQuantity
- * @param {number} totalValue
  * @returns {HTMLElement}
  */
-function buildProductionModal(operator, records, totalShifts, totalQuantity, totalValue) {
+function buildProductionModal(operator, records, totalShifts, totalQuantity) {
   const statusLabel = operator.isActive !== false ? 'Activo' : 'Inactivo';
   const statusClass = operator.isActive !== false ? 'badge--green' : 'badge--gray';
 
@@ -948,8 +944,7 @@ function buildProductionModal(operator, records, totalShifts, totalQuantity, tot
   );
 
   const tableRows = sortedRecords.map(r => {
-    const shiftValue  = (r.quantity || 0) * (r.productPriceSnapshot || 0);
-    const machineName = machineMap.get(String(r.machineId))?.name || '[Máquina eliminada]';
+    const machineName = machineMap.get(String(r.machineId))?.name || '[M\u00e1quina eliminada]';
     const productName = productMap.get(String(r.productId))?.name || '[Producto eliminado]';
     return `
       <tr class="table-row">
@@ -960,9 +955,6 @@ function buildProductionModal(operator, records, totalShifts, totalQuantity, tot
         <td>${escapeHTML(productName)}</td>
         <td class="text-right" style="font-family:var(--font-mono);">
           ${modalFormatNumber(r.quantity)}
-        </td>
-        <td class="text-right" style="font-family:var(--font-mono);">
-          ${modalFormatCurrency(shiftValue)}
         </td>
       </tr>
     `;
@@ -981,10 +973,9 @@ function buildProductionModal(operator, records, totalShifts, totalQuantity, tot
            <thead>
              <tr>
                <th>Fecha</th>
-               <th>Máquina</th>
+               <th>M\u00e1quina</th>
                <th>Producto</th>
                <th class="text-right">Cantidad</th>
-               <th class="text-right">Valor del turno</th>
              </tr>
            </thead>
            <tbody>${tableRows}</tbody>
@@ -1027,10 +1018,6 @@ function buildProductionModal(operator, records, totalShifts, totalQuantity, tot
         <div class="op-modal__stat">
           <span class="op-modal__stat-value">${modalFormatNumber(totalQuantity)}</span>
           <span class="op-modal__stat-label">Cantidad total</span>
-        </div>
-        <div class="op-modal__stat">
-          <span class="op-modal__stat-value">${modalFormatCurrency(totalValue)}</span>
-          <span class="op-modal__stat-label">Valor total generado</span>
         </div>
       </div>
 

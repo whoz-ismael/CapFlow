@@ -6,13 +6,9 @@
  * defined in styles.css.
  *
  * KPIs displayed:
- *   Row 1 — Today   : shifts, quantity produced, value generated
- *   Row 2 — Month   : same metrics for the current calendar month
+ *   Row 1 — Today   : shifts, quantity produced
+ *   Row 2 — Month   : shifts, quantity, cost per package
  *   Row 3 — Highlights: top operator (quantity) and most-used machine (shifts)
- *
- * VALUE FORMULA: record.quantity × record.productPriceSnapshot
- * Both fields are immutable snapshots stamped at creation — no recalculation
- * drift, no dependency on current product prices.
  *
  * All visible text: Spanish
  * All code identifiers: English
@@ -115,7 +111,6 @@ export async function mountDashboard(container) {
 
     fillKPI('kpi-shifts-today',   formatNumber(todayRecords.length));
     fillKPI('kpi-quantity-today', formatNumber(sumField(todayRecords, 'quantity')));
-    fillKPI('kpi-value-today',    formatCurrency(sumValue(todayRecords)));
 
     // Show the "no production data yet" notice if the entire store is empty.
     if (records.length === 0) {
@@ -218,7 +213,6 @@ function buildShellHTML() {
         <div class="dashboard-kpi-row">
           ${buildKPICard('kpi-shifts-today',   '⇌', 'Turnos hoy',    'turnos')}
           ${buildKPICard('kpi-quantity-today',  '⊡', 'Cantidad hoy',  'unidades')}
-          ${buildKPICard('kpi-value-today',     '$', 'Valor hoy',     'generado')}
         </div>
       </div>
 
@@ -233,7 +227,6 @@ function buildShellHTML() {
         <div class="dashboard-kpi-row">
           ${buildKPICard('kpi-shifts-month',   '⇌', 'Turnos del mes',    'turnos')}
           ${buildKPICard('kpi-quantity-month',  '⊡', 'Cantidad del mes',  'unidades')}
-          ${buildKPICard('kpi-value-month',     '$', 'Valor del mes',     'generado')}
           ${buildCostKPICard()}
         </div>
       </div>
@@ -349,18 +342,6 @@ function sumField(records, field) {
 }
 
 /**
- * Sum (quantity × productPriceSnapshot) across an array of records.
- * @param {Array} records
- * @returns {number}
- */
-function sumValue(records) {
-  return records.reduce(
-    (acc, r) => acc + (r.quantity || 0) * (r.productPriceSnapshot || 0),
-    0
-  );
-}
-
-/**
  * Find the entity (by groupKey) with the highest total quantity.
  * Returns { id, total } or null if records is empty.
  * @param {Array}  records
@@ -420,7 +401,7 @@ function showMonthSpinners() {
   const spinner = '<span class="kpi-loading"><span class="spinner spinner--sm"></span></span>';
 
   // Numeric KPI value slots
-  ['kpi-shifts-month', 'kpi-quantity-month', 'kpi-value-month', 'kpi-cost-per-pkg']
+  ['kpi-shifts-month', 'kpi-quantity-month', 'kpi-cost-per-pkg']
     .forEach(id => {
       const el = document.getElementById(id);
       if (el) el.innerHTML = spinner;
@@ -473,7 +454,6 @@ function renderMonth(month) {
   // ── Month KPIs ─────────────────────────────────────────────────────────────
   fillKPI('kpi-shifts-month',   formatNumber(monthRecords.length));
   fillKPI('kpi-quantity-month', formatNumber(sumField(monthRecords, 'quantity')));
-  fillKPI('kpi-value-month',    formatCurrency(sumValue(monthRecords)));
 
   // ── Real cost per package ──────────────────────────────────────────────────
   // prevMonthString() inside calcMonthlyCostPerPackage uses the passed `month`

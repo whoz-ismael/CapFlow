@@ -266,8 +266,6 @@ function buildMonthlyReportOutput(month) {
   // ── Production KPIs ───────────────────────────────────────────────────────
   const shifts    = monthProd.length;
   const units     = monthProd.reduce((s, r) => s + (r.quantity || 0), 0);
-  const valueProduced = monthProd.reduce(
-    (s, r) => s + (r.quantity || 0) * (r.productPriceSnapshot || 0), 0);
   const laborCost = monthProd.reduce(
     (s, r) => s + (r.quantity || 0) * (r.operatorRateSnapshot || 0), 0);
 
@@ -360,7 +358,6 @@ function buildMonthlyReportOutput(month) {
         <div class="rpt-kpi-grid">
           ${rptKPI('Turnos',          formatNumber(shifts), '')}
           ${rptKPI('Unidades producidas', formatNumber(units), '')}
-          ${rptKPI('Valor producido', formatCurrency(valueProduced), 'a precio snapshot')}
           ${rptKPI('Costo laboral',   formatCurrency(laborCost), '')}
           ${rptKPI('Costo material',   closingEntered ? formatCurrency(materialCost) : '—', closingEntered ? '' : 'Cierre pendiente')}
           ${rptKPI('Gastos indirectos', formatCurrency(overheadCost), overheadCost === 0 ? 'Sin gastos registrados' : '')}
