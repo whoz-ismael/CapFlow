@@ -7,6 +7,7 @@
  *   • Automatic inventory deduction for manufactured lines via InventoryAPI
  *   • Monthly cost-per-package snapshot for manufactured lines
  *   • Safe edit (delta re-balance) and delete (full stock return)
+ *   • Accounts Receivable (AR) — payment tracking per sale via SalePaymentsAPI
  *
  * Investor pricing (auto-applied when selected client is the investor):
  *   • RD$100/pkg benefit discount on every manufactured line (always)
@@ -22,6 +23,13 @@
  *   DELETE  → addStock (full return) per manufactured line
  *   RESALE  → no inventory touches
  *
+ * AR rules:
+ *   • Payments are recorded against a sale via SalePaymentsAPI
+ *   • Status = 'paid' when total payments ≥ sale revenue
+ *   • Status = 'partial' when 0 < payments < revenue
+ *   • Status = 'unpaid' when no payments
+ *   • Deleting a sale also removes all its payments (removeBySaleId)
+ *
  * All visible text: Spanish  |  All code identifiers: English
  */
 
@@ -34,6 +42,7 @@ import { ProductionAPI }              from '../api.js';
 import { RawMaterialsAPI }            from '../api.js';
 import { MonthlyInventoryAPI }        from '../api.js';
 import { InvestorAPI }                from '../api.js';
+import { SalePaymentsAPI }            from '../api.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -42,6 +51,15 @@ const INVESTOR_BENEFIT_PER_PKG = 100;
 
 /** Fixed RD$ debt paydown per manufactured package (while debt > 0). */
 const INVESTOR_PAYDOWN_PER_PKG = 100;
+
+/** Payment methods available in the AR form. */
+const PAYMENT_METHODS = [
+  { value: 'cash',         label: 'Efectivo' },
+  { value: 'transfer',     label: 'Transferencia' },
+  { value: 'check',        label: 'Cheque' },
+  { value: 'card',         label: 'Tarjeta' },
+  { value: 'other',        label: 'Otro' },
+];
 
 // ─── Module State ─────────────────────────────────────────────────────────────
 
@@ -66,6 +84,11 @@ let _lineSeq = 0;
 let _allProduction = [];
 let _allPurchases  = [];
 let _allMonthlyInv = [];
+
+/** All payment records loaded on each loadAll(). */
+let _allPayments = [];
+/** Map: saleId (string) → payment[] */
+let _paymentsMap = new Map();
 
 let filterMonth    = '';
 let filterClientId = 'all';
@@ -259,6 +282,15 @@ function buildShellHTML() {
               <option value="all">Todos los clientes</option>
             </select>
           </div>
+          <div class="select-wrapper">
+            <select class="form-input form-select form-input--sm"
+              id="sales-filter-ar" aria-label="Filtrar por estado de cobro">
+              <option value="all">Todos los estados</option>
+              <option value="unpaid">Pendiente</option>
+              <option value="partial">Parcial</option>
+              <option value="paid">Cobrado</option>
+            </select>
+          </div>
           <input class="form-input form-input--sm" type="search"
             id="sales-search" placeholder="Buscar…" aria-label="Buscar">
         </div>
@@ -283,6 +315,7 @@ function buildShellHTML() {
               <th class="text-right">Costos</th>
               <th class="text-right">Ganancia</th>
               <th class="text-right">Margen</th>
+              <th class="text-center">Estado cobro</th>
               <th class="text-center">Adjuntos</th>
               <th class="text-center">Acciones</th>
             </tr>
@@ -301,7 +334,7 @@ function buildShellHTML() {
 async function loadAll() {
   showTableLoading(true);
   try {
-    const [sales, clients, products, production, purchases, monthlyInv, investor] =
+    const [sales, clients, products, production, purchases, monthlyInv, investor, payments] =
       await Promise.all([
         SalesAPI.getAll(),
         CustomersAPI.getAll(),
@@ -309,17 +342,27 @@ async function loadAll() {
         ProductionAPI.getAll(),
         RawMaterialsAPI.getAll(),
         MonthlyInventoryAPI.getAll(),
-        InvestorAPI.get(),
+        InvestorAPI.get().catch(() => null),
+        SalePaymentsAPI.getAll().catch(() => []),
       ]);
 
     allSales        = sales;
-    allClients      = clients.filter(c => c.status === 'active');
+    allClients      = clients.filter(c => c.status !== 'inactive');
     allClientsIndex = new Map(clients.map(c => [String(c.id), c]));
     productMap      = new Map(products.map(p => [String(p.id), p]));
+    investorRecord  = investor;
     _allProduction  = production;
     _allPurchases   = purchases;
     _allMonthlyInv  = monthlyInv;
-    investorRecord  = investor ?? null;
+
+    // Build payments map
+    _allPayments = payments;
+    _paymentsMap = new Map();
+    for (const p of payments) {
+      const k = String(p.saleId);
+      if (!_paymentsMap.has(k)) _paymentsMap.set(k, []);
+      _paymentsMap.get(k).push(p);
+    }
 
     populateSelect(
       'sale-field-client',
@@ -350,11 +393,36 @@ async function loadAll() {
   }
 }
 
+// ─── AR Helpers ───────────────────────────────────────────────────────────────
+
+/**
+ * Compute the payment status of a sale from the in-memory payments map.
+ * @param {string} saleId
+ * @param {number} revenue
+ * @returns {{ status: 'paid'|'partial'|'unpaid', paid: number, balance: number }}
+ */
+function getArStatus(saleId, revenue) {
+  const payments = _paymentsMap.get(String(saleId)) || [];
+  const paid     = payments.reduce((s, p) => s + (p.amount || 0), 0);
+  const balance  = Math.max(0, (revenue || 0) - paid);
+  if (paid <= 0)       return { status: 'unpaid',  paid, balance: revenue || 0 };
+  if (balance <= 0.01) return { status: 'paid',    paid, balance: 0 };
+  return               { status: 'partial', paid, balance };
+}
+
+const AR_STATUS_LABEL = { paid: 'Cobrado', partial: 'Parcial', unpaid: 'Pendiente' };
+const AR_STATUS_CLASS = {
+  paid:    'badge--ar-paid',
+  partial: 'badge--ar-partial',
+  unpaid:  'badge--ar-unpaid',
+};
+
 // ─── Filters & Table ──────────────────────────────────────────────────────────
 
 function applyFilters() {
   const month    = (document.getElementById('sales-filter-month')?.value  || '').trim();
   const clientId =  document.getElementById('sales-filter-client')?.value || 'all';
+  const arFilter =  document.getElementById('sales-filter-ar')?.value     || 'all';
   const query    = (document.getElementById('sales-search')?.value        || '').trim().toLowerCase();
 
   filterMonth    = month;
@@ -364,6 +432,12 @@ function applyFilters() {
   let results = allSales;
   if (month)              results = results.filter(s => s.month === month);
   if (clientId !== 'all') results = results.filter(s => String(s.clientId) === String(clientId));
+  if (arFilter !== 'all') {
+    results = results.filter(s => {
+      const { status } = getArStatus(s.id, (s.totals || {}).revenue);
+      return status === arFilter;
+    });
+  }
   if (query) {
     results = results.filter(s => {
       const c = allClientsIndex.get(String(s.clientId));
@@ -393,22 +467,28 @@ function renderTable(sales) {
   wrapper.style.display = 'block';
 
   tbody.innerHTML = sales.map(s => buildSaleRow(s)).join('');
+
   tbody.querySelectorAll('[data-action="edit"]').forEach(btn =>
     btn.addEventListener('click', () => handleEdit(btn.dataset.id))
   );
   tbody.querySelectorAll('[data-action="delete"]').forEach(btn =>
     btn.addEventListener('click', () => handleDelete(btn.dataset.id))
   );
+  tbody.querySelectorAll('[data-action="payments"]').forEach(btn =>
+    btn.addEventListener('click', () => openPaymentsModal(btn.dataset.id))
+  );
 }
 
 function buildSaleRow(sale) {
   const client     = allClientsIndex.get(String(sale.clientId));
-  const clientName = client ? escapeHTML(client.name)
+  const clientName = client
+    ? escapeHTML(client.name)
     : '<em style="color:var(--color-text-muted);">[Cliente inactivo/eliminado]</em>';
 
   const t         = sale.totals || { revenue: 0, cost: 0, profit: 0, margin: 0 };
   const marginPct = t.revenue > 0 ? ((t.profit / t.revenue) * 100).toFixed(1) + '%' : '—';
   const profitCls = t.profit >= 0 ? 'inv-qty-positive' : 'inv-qty-negative';
+
   const attCount  = (sale.attachments || []).length;
   const attBadge  = attCount > 0
     ? `<span class="badge badge--blue" style="cursor:pointer;"
@@ -420,6 +500,14 @@ function buildSaleRow(sale) {
          title="Precio inv. — beneficio: ${formatCurrency(sale.investor.benefitDiscountTotal)}, amort.: ${formatCurrency(sale.investor.amortizationTotal)}">◇ INV</span> `
     : '';
 
+  // AR status
+  const { status, paid, balance } = getArStatus(sale.id, t.revenue);
+  const arLabel = AR_STATUS_LABEL[status];
+  const arClass = AR_STATUS_CLASS[status];
+  const arTitle = status === 'paid'
+    ? `Cobrado: ${formatCurrency(paid)}`
+    : `Cobrado: ${formatCurrency(paid)} · Pendiente: ${formatCurrency(balance)}`;
+
   return `
     <tr class="table-row">
       <td>${escapeHTML(formatDate(sale.saleDate))}</td>
@@ -429,6 +517,14 @@ function buildSaleRow(sale) {
       <td class="text-right">${formatCurrency(t.cost)}</td>
       <td class="text-right"><span class="${profitCls}">${formatCurrency(t.profit)}</span></td>
       <td class="text-right">${marginPct}</td>
+      <td class="text-center">
+        <button class="badge ${arClass} ar-status-btn"
+          data-action="payments" data-id="${sale.id}"
+          title="${escapeHTML(arTitle)}"
+          style="cursor:pointer;border:none;font-size:0.75rem;padding:2px 8px;">
+          ${escapeHTML(arLabel)}
+        </button>
+      </td>
       <td class="text-center">${attBadge}</td>
       <td class="text-center td-actions">
         <button class="btn btn--ghost btn--xs" data-action="edit"   data-id="${sale.id}">✎ Editar</button>
@@ -447,6 +543,7 @@ function attachListeners() {
 
   document.getElementById('sales-filter-month').addEventListener('change', applyFilters);
   document.getElementById('sales-filter-client').addEventListener('change', applyFilters);
+  document.getElementById('sales-filter-ar').addEventListener('change', applyFilters);
   document.getElementById('sales-search').addEventListener('input', applyFilters);
 
   document.getElementById('sale-file-input')
@@ -459,102 +556,412 @@ function attachListeners() {
   document.getElementById('sale-field-client').addEventListener('change', () => {
     refreshInvestorBanner();
     updateTotalsPreview();
-    // Refresh all row previews to update investor discount display
     document.querySelectorAll('#sales-lines-tbody .sale-line-row')
       .forEach(row => updateLinePreview(row));
   });
 
   document.getElementById('sales-table-card').addEventListener('click', e => {
-    const btn = e.target.closest('[data-action="view-attach"]');
-    if (!btn) return;
-    const sale = allSales.find(s => String(s.id) === String(btn.dataset.id));
-    if (sale) viewAttachments(sale.attachments || []);
+    const attBtn = e.target.closest('[data-action="view-attach"]');
+    if (attBtn) {
+      const sale = allSales.find(s => String(s.id) === String(attBtn.dataset.id));
+      if (sale) viewAttachments(sale.attachments || []);
+    }
   });
 }
 
 // ─── Investor Helpers ─────────────────────────────────────────────────────────
 
-/**
- * True if clientId matches the investor's customer record.
- */
 function isInvestorSale(clientId) {
-  return investorRecord !== null &&
-    String(clientId || '') !== '' &&
-    String(clientId) === String(investorRecord.clientId || '');
+  return !!(investorRecord && String(investorRecord.clientId) === String(clientId));
 }
 
-/**
- * Available investor debt for computing adjustments in the current form context.
- *
- * In edit mode the previously-applied amortization is added back so that
- * re-computation starts from the same pre-sale baseline as the original save.
- */
 function effectiveInvestorDebt() {
-  if (!investorRecord) return 0;
-  const previousAmort = editingSale?.investor?.amortizationTotal || 0;
-  return Math.max(0, (investorRecord.totalDebt || 0) + previousAmort);
+  return investorRecord ? (investorRecord.totalDebt || 0) : 0;
+}
+
+function refreshInvestorBanner() {
+  const clientId = document.getElementById('sale-field-client')?.value || '';
+  const banner   = document.getElementById('sales-investor-banner');
+  const hint     = document.getElementById('sales-investor-debt-hint');
+  if (!banner) return;
+
+  const show = isInvestorSale(clientId);
+  banner.style.display = show ? '' : 'none';
+  if (show && hint) {
+    const debt = effectiveInvestorDebt();
+    hint.textContent = debt > 0
+      ? `Deuda actual: ${formatCurrency(debt)}`
+      : 'Deuda saldada — solo aplica descuento beneficio.';
+  }
 }
 
 /**
- * Apply investor pricing adjustments to enriched lines.
- *
- * Lines are processed in array order — earlier lines consume available debt first.
- * Only manufactured lines are eligible.
- *
- * @param {Array}  lines         - Enriched lines ({productType, quantity, lineRevenue,
- *                                  lineCost, lineProfit, …}). NOT mutated.
- * @param {number} availableDebt - Current investor debt available for paydown (≥ 0)
- * @returns {{ adjustedLines, amortizationTotal, benefitDiscountTotal }}
+ * Compute investor adjustments for a set of enriched lines.
+ * Returns adjusted lines and totals.
  */
-function computeInvestorAdjustments(lines, availableDebt) {
-  let remainingDebt        = Math.max(0, availableDebt);
-  let amortizationTotal    = 0;
+function computeInvestorAdjustments(enrichedLines, currentDebt) {
+  let remainingDebt        = currentDebt;
   let benefitDiscountTotal = 0;
+  let amortizationTotal    = 0;
 
-  const adjustedLines = lines.map(line => {
-    if (line.productType !== 'manufactured') {
-      return { ...line, investorBenefit: 0, investorPaydown: 0 };
-    }
-    const qty             = line.quantity;
-    const benefitDiscount = INVESTOR_BENEFIT_PER_PKG * qty;
-    const paydownDiscount = Math.min(INVESTOR_PAYDOWN_PER_PKG * qty, remainingDebt);
-    const totalDiscount   = benefitDiscount + paydownDiscount;
+  const adjustedLines = enrichedLines.map(line => {
+    if (line.productType !== 'manufactured') return line;
 
-    remainingDebt        -= paydownDiscount;
-    amortizationTotal    += paydownDiscount;
-    benefitDiscountTotal += benefitDiscount;
+    const benefitDiscount  = INVESTOR_BENEFIT_PER_PKG * line.quantity;
+    const paydownDiscount  = Math.min(INVESTOR_PAYDOWN_PER_PKG * line.quantity, remainingDebt);
+    remainingDebt         -= paydownDiscount;
+    benefitDiscountTotal  += benefitDiscount;
+    amortizationTotal     += paydownDiscount;
 
+    const totalDiscount  = benefitDiscount + paydownDiscount;
+    const adjRevenue     = Math.max(0, line.lineRevenue - totalDiscount);
     return {
       ...line,
-      lineRevenue:     line.lineRevenue - totalDiscount,
-      lineProfit:      line.lineProfit  - totalDiscount,
-      investorBenefit: benefitDiscount,
-      investorPaydown: paydownDiscount,
+      lineRevenue: adjRevenue,
+      lineProfit:  adjRevenue - line.lineCost,
     };
   });
 
-  return { adjustedLines, amortizationTotal, benefitDiscountTotal };
+  return { adjustedLines, benefitDiscountTotal, amortizationTotal };
+}
+
+// ─── Accounts Receivable Modal ────────────────────────────────────────────────
+
+/**
+ * Open the AR payments modal for a given sale.
+ * Modal is injected into body so it survives container re-renders.
+ * @param {string} saleId
+ */
+async function openPaymentsModal(saleId) {
+  const sale   = allSales.find(s => String(s.id) === String(saleId));
+  if (!sale) return;
+
+  const client   = allClientsIndex.get(String(sale.clientId));
+  const clientName = client ? client.name : '[Cliente eliminado]';
+  const revenue    = (sale.totals || {}).revenue || 0;
+
+  // Remove any stale modal
+  document.getElementById('ar-modal-backdrop')?.remove();
+
+  const MODAL_ID = 'ar-modal-backdrop';
+  const backdrop = document.createElement('div');
+  backdrop.id        = MODAL_ID;
+  backdrop.className = 'ar-modal-backdrop';
+  backdrop.innerHTML = buildArModalHTML(sale, clientName, revenue);
+  document.body.appendChild(backdrop);
+
+  // Render payments list
+  _renderArPaymentsList(saleId, revenue);
+
+  // ── Event bindings ────────────────────────────────────────────────────────
+
+  // Close on backdrop click
+  backdrop.addEventListener('click', e => {
+    if (e.target === backdrop) _closeArModal();
+  });
+  backdrop.querySelector('#ar-modal-close').addEventListener('click', _closeArModal);
+
+  // Keyboard ESC
+  const onKey = e => { if (e.key === 'Escape') { _closeArModal(); document.removeEventListener('keydown', onKey); } };
+  document.addEventListener('keydown', onKey);
+
+  // Add payment form submit
+  backdrop.querySelector('#ar-payment-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    await _handleAddPayment(saleId, revenue);
+  });
+}
+
+function buildArModalHTML(sale, clientName, revenue) {
+  const methodOptions = PAYMENT_METHODS.map(m =>
+    `<option value="${m.value}">${escapeHTML(m.label)}</option>`
+  ).join('');
+
+  const invNote = sale.invoiceNumber
+    ? `<span style="color:var(--color-text-muted);font-size:0.82rem;">Factura: ${escapeHTML(sale.invoiceNumber)}</span>`
+    : '';
+
+  return `
+    <div class="ar-modal" role="dialog" aria-modal="true" aria-labelledby="ar-modal-title">
+
+      <!-- Header -->
+      <div class="ar-modal__header">
+        <div>
+          <h3 class="ar-modal__title" id="ar-modal-title">
+            <span style="color:var(--color-accent,#6c63ff);">◈</span>
+            Cuentas por Cobrar
+          </h3>
+          <div style="margin-top:4px;display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap;">
+            <span style="font-size:0.9rem;color:var(--color-text-muted);">
+              ${escapeHTML(clientName)} · ${escapeHTML(formatDate(sale.saleDate))}
+            </span>
+            ${invNote}
+          </div>
+        </div>
+        <button class="ar-modal__close" id="ar-modal-close" type="button"
+          aria-label="Cerrar">✕</button>
+      </div>
+
+      <!-- Summary bar -->
+      <div class="ar-summary-bar" id="ar-summary-bar">
+        <!-- populated by _renderArPaymentsList -->
+      </div>
+
+      <!-- Payments list -->
+      <div class="ar-payments-section">
+        <div class="ar-section-title">Pagos registrados</div>
+        <div id="ar-payments-list">
+          <div style="display:flex;align-items:center;gap:8px;padding:var(--space-md);color:var(--color-text-muted);">
+            <div class="spinner spinner--sm"></div> Cargando…
+          </div>
+        </div>
+      </div>
+
+      <!-- Add payment form -->
+      <div class="ar-add-section">
+        <div class="ar-section-title">Registrar pago</div>
+        <form id="ar-payment-form" novalidate>
+          <div class="ar-form-grid">
+            <div class="form-group" style="margin:0;">
+              <label class="form-label" for="ar-field-date">Fecha <span class="required">*</span></label>
+              <input class="form-input form-input--sm" type="date"
+                id="ar-field-date" value="${todayString()}" required>
+              <span class="form-error" id="ar-error-date"></span>
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label class="form-label" for="ar-field-amount">Monto (RD$) <span class="required">*</span></label>
+              <input class="form-input form-input--sm" type="number"
+                id="ar-field-amount" min="0.01" step="0.01" placeholder="0.00" required>
+              <span class="form-error" id="ar-error-amount"></span>
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label class="form-label" for="ar-field-method">Método</label>
+              <div class="select-wrapper">
+                <select class="form-input form-select form-input--sm" id="ar-field-method">
+                  ${methodOptions}
+                </select>
+              </div>
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label class="form-label" for="ar-field-notes">Notas (opcional)</label>
+              <input class="form-input form-input--sm" type="text"
+                id="ar-field-notes" maxlength="150" placeholder="Referencia, cheque #…">
+            </div>
+          </div>
+          <div style="display:flex;justify-content:flex-end;margin-top:var(--space-md);">
+            <button type="submit" class="btn btn--primary btn--sm" id="ar-submit-btn">
+              ＋ Registrar pago
+            </button>
+          </div>
+        </form>
+      </div>
+
+    </div>
+  `;
 }
 
 /**
- * Show or hide the investor banner based on the currently-selected client.
- * Updates the debt hint text inside the banner.
+ * Render (or re-render) the summary bar and payments list inside the open modal.
+ * Also refreshes the payments map so the table badge updates on close.
+ * @param {string} saleId
+ * @param {number} revenue
  */
-function refreshInvestorBanner() {
-  const banner   = document.getElementById('sales-investor-banner');
-  const debtHint = document.getElementById('sales-investor-debt-hint');
-  if (!banner) return;
+function _renderArPaymentsList(saleId, revenue) {
+  const payments = _paymentsMap.get(String(saleId)) || [];
+  const { status, paid, balance } = getArStatus(saleId, revenue);
 
-  const clientId = document.getElementById('sale-field-client')?.value || '';
-  const active   = isInvestorSale(clientId);
-  banner.style.display = active ? 'flex' : 'none';
-
-  if (active && debtHint) {
-    const debt = effectiveInvestorDebt();
-    debtHint.textContent = debt > 0
-      ? `Deuda actual: ${formatCurrency(debt)}.`
-      : 'Deuda saldada — solo aplica el descuento de beneficio.';
+  // ── Summary bar ──────────────────────────────────────────────────────────
+  const summaryBar = document.getElementById('ar-summary-bar');
+  if (summaryBar) {
+    const pct     = revenue > 0 ? Math.min(100, (paid / revenue) * 100) : 0;
+    const barClass = status === 'paid' ? 'ar-progress--paid'
+                   : status === 'partial' ? 'ar-progress--partial'
+                   : 'ar-progress--unpaid';
+    summaryBar.innerHTML = `
+      <div class="ar-summary-row">
+        <div class="ar-summary-kpi">
+          <span class="ar-summary-kpi__label">Total factura</span>
+          <span class="ar-summary-kpi__value">${formatCurrency(revenue)}</span>
+        </div>
+        <div class="ar-summary-kpi">
+          <span class="ar-summary-kpi__label">Cobrado</span>
+          <span class="ar-summary-kpi__value ar-summary-kpi__value--paid">${formatCurrency(paid)}</span>
+        </div>
+        <div class="ar-summary-kpi">
+          <span class="ar-summary-kpi__label">Pendiente</span>
+          <span class="ar-summary-kpi__value ar-summary-kpi__value--balance"
+            style="${balance <= 0 ? 'color:var(--color-success);' : ''}">${formatCurrency(balance)}</span>
+        </div>
+        <div class="ar-summary-kpi">
+          <span class="ar-summary-kpi__label">Estado</span>
+          <span class="badge ${AR_STATUS_CLASS[status]}" style="font-size:0.8rem;">
+            ${AR_STATUS_LABEL[status]}
+          </span>
+        </div>
+      </div>
+      <div class="ar-progress-track">
+        <div class="ar-progress-bar ${barClass}" style="width:${pct.toFixed(1)}%;"></div>
+      </div>
+    `;
   }
+
+  // ── Payments list ────────────────────────────────────────────────────────
+  const listEl = document.getElementById('ar-payments-list');
+  if (!listEl) return;
+
+  if (!payments.length) {
+    listEl.innerHTML = `
+      <div style="padding:var(--space-md);text-align:center;color:var(--color-text-muted);font-size:0.85rem;">
+        Sin pagos registrados aún.
+      </div>`;
+    return;
+  }
+
+  const sorted = [...payments].sort((a, b) =>
+    (a.paymentDate || '').localeCompare(b.paymentDate || ''));
+
+  const methodLabel = v => PAYMENT_METHODS.find(m => m.value === v)?.label || v || '—';
+
+  listEl.innerHTML = `
+    <table class="data-table ar-payments-table">
+      <thead>
+        <tr>
+          <th>Fecha</th>
+          <th class="text-right">Monto</th>
+          <th>Método</th>
+          <th>Notas</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${sorted.map(p => `
+          <tr>
+            <td>${escapeHTML(formatDate(p.paymentDate))}</td>
+            <td class="text-right" style="font-weight:600;color:var(--color-success);">${formatCurrency(p.amount)}</td>
+            <td>${escapeHTML(methodLabel(p.method))}</td>
+            <td style="color:var(--color-text-muted);font-size:0.82rem;">${escapeHTML(p.notes || '—')}</td>
+            <td class="text-center">
+              <button class="btn btn--danger btn--xs"
+                data-action="del-payment" data-payment-id="${escapeHTML(p.id)}"
+                title="Eliminar pago">✕</button>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+
+  // Wire delete buttons
+  listEl.querySelectorAll('[data-action="del-payment"]').forEach(btn => {
+    btn.addEventListener('click', () => _handleDeletePayment(btn.dataset.paymentId, saleId, revenue));
+  });
+}
+
+/**
+ * Handle the add-payment form submission inside the AR modal.
+ */
+async function _handleAddPayment(saleId, revenue) {
+  // Validate
+  const dateEl   = document.getElementById('ar-field-date');
+  const amountEl = document.getElementById('ar-field-amount');
+  const errDate  = document.getElementById('ar-error-date');
+  const errAmt   = document.getElementById('ar-error-amount');
+
+  if (errDate)  errDate.textContent  = '';
+  if (errAmt)   errAmt.textContent   = '';
+
+  let valid = true;
+  if (!dateEl?.value) {
+    if (errDate) errDate.textContent = 'La fecha es obligatoria.';
+    valid = false;
+  }
+  const amount = parseFloat(amountEl?.value);
+  if (!amount || amount <= 0) {
+    if (errAmt) errAmt.textContent = 'Ingresa un monto mayor a 0.';
+    valid = false;
+  }
+  if (!valid) return;
+
+  const submitBtn = document.getElementById('ar-submit-btn');
+  setButtonLoading(submitBtn, true);
+
+  try {
+    const payment = await SalePaymentsAPI.create({
+      saleId,
+      paymentDate: dateEl.value,
+      amount,
+      method: document.getElementById('ar-field-method')?.value || 'cash',
+      notes:  document.getElementById('ar-field-notes')?.value  || '',
+    });
+
+    // Update in-memory map
+    const key = String(saleId);
+    if (!_paymentsMap.has(key)) _paymentsMap.set(key, []);
+    _paymentsMap.get(key).push(payment);
+
+    // Reset amount + notes; keep date and method for quick multi-entry
+    if (amountEl) amountEl.value = '';
+    const notesEl = document.getElementById('ar-field-notes');
+    if (notesEl) notesEl.value = '';
+
+    _renderArPaymentsList(saleId, revenue);
+
+    // Refresh table badge in background (no full reload needed)
+    _refreshSaleRowBadge(saleId);
+
+    showFeedback(`Pago de ${formatCurrency(amount)} registrado.`, 'success');
+  } catch (err) {
+    showFeedback(`Error al registrar pago: ${err.message}`, 'error');
+  } finally {
+    setButtonLoading(submitBtn, false);
+  }
+}
+
+/**
+ * Handle deleting a single payment entry.
+ */
+async function _handleDeletePayment(paymentId, saleId, revenue) {
+  if (!confirm('¿Eliminar este pago? Esta acción no se puede deshacer.')) return;
+  try {
+    await SalePaymentsAPI.remove(paymentId);
+
+    // Update in-memory map
+    const key = String(saleId);
+    const list = _paymentsMap.get(key) || [];
+    _paymentsMap.set(key, list.filter(p => String(p.id) !== String(paymentId)));
+
+    _renderArPaymentsList(saleId, revenue);
+    _refreshSaleRowBadge(saleId);
+    showFeedback('Pago eliminado.', 'success');
+  } catch (err) {
+    showFeedback(`Error al eliminar pago: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * Refresh only the AR status badge in the sale table row — avoids a full re-render.
+ * @param {string} saleId
+ */
+function _refreshSaleRowBadge(saleId) {
+  const sale = allSales.find(s => String(s.id) === String(saleId));
+  if (!sale) return;
+  const revenue = (sale.totals || {}).revenue || 0;
+  const { status, paid, balance } = getArStatus(saleId, revenue);
+
+  const btn = document.querySelector(
+    `#sales-tbody [data-action="payments"][data-id="${CSS.escape(String(saleId))}"]`
+  );
+  if (!btn) return;
+  btn.className = `badge ${AR_STATUS_CLASS[status]} ar-status-btn`;
+  btn.textContent = AR_STATUS_LABEL[status];
+  const title = status === 'paid'
+    ? `Cobrado: ${formatCurrency(paid)}`
+    : `Cobrado: ${formatCurrency(paid)} · Pendiente: ${formatCurrency(balance)}`;
+  btn.title = title;
+}
+
+function _closeArModal() {
+  document.getElementById('ar-modal-backdrop')?.remove();
 }
 
 // ─── Form Submit ──────────────────────────────────────────────────────────────
@@ -567,79 +974,116 @@ async function handleFormSubmit(e) {
   setButtonLoading(submitBtn, true);
 
   try {
-    const saleDate      = document.getElementById('sale-field-date').value;
-    const clientId      = document.getElementById('sale-field-client').value;
+    const saleDate     = document.getElementById('sale-field-date').value;
+    const clientId     = document.getElementById('sale-field-client').value;
     const invoiceNumber = document.getElementById('sale-field-invoice').value.trim();
-    const notes         = document.getElementById('sale-field-notes').value.trim();
-    const month         = saleDate.slice(0, 7);
+    const notes        = document.getElementById('sale-field-notes').value.trim();
+    const month        = saleDate.slice(0, 7);
+    const investorSale = isInvestorSale(clientId);
 
-    const { costPerPackage: mfgCostPerPkg, missing: costMissing } =
+    const { costPerPackage: mfgCost, missing: costMissing } =
       computeMonthlyCostPerPackage(month);
 
-    // ── Build enriched lines (pre-investor) ───────────────────────────────────
     const rawLines = collectLines();
-    let lines = rawLines.map((l, idx) => {
-      const product     = productMap.get(String(l.productId));
-      const pType       = product ? product.type : 'manufactured';
-      const qty         = l.quantity;
-      const price       = l.unitPrice;
-      const lineRevenue = qty * price;
-      const costPerUnit = pType === 'resale' ? l.resaleCost : mfgCostPerPkg;
-      const lineCost    = qty * costPerUnit;
+
+    // Build line objects with typed cost
+    const lines = rawLines.map(l => {
+      const product  = productMap.get(String(l.productId));
+      const pType    = product ? product.type : 'manufactured';
+      const resaleCostPerUnit = pType === 'resale' ? l.resaleCost : 0;
+      const costPerUnit       = pType === 'resale' ? l.resaleCost : mfgCost;
       return {
-        id:                     `ln-${Date.now()}-${idx}`,
-        productId:              l.productId,
-        productType:            pType,
-        quantity:               qty,
-        unitPrice:              price,
-        lineRevenue,
-        costPerUnitSnapshot:    costPerUnit,
-        lineCost,
-        lineProfit:             lineRevenue - lineCost,
-        resaleCostPerUnitInput: pType === 'resale' ? l.resaleCost : null,
-        investorBenefit:        0,
-        investorPaydown:        0,
+        productId:            l.productId,
+        productType:          pType,
+        quantity:             l.quantity,
+        unitPrice:            l.unitPrice,
+        salePricePerUnit:     l.unitPrice,
+        costPerUnitSnapshot:  costPerUnit,
+        resaleCostPerUnit:    resaleCostPerUnit,
+        resaleCostPerUnitInput: resaleCostPerUnit,
+        lineRevenue:          l.quantity * l.unitPrice,
+        lineCost:             l.quantity * costPerUnit,
+        lineProfit:           l.quantity * l.unitPrice - l.quantity * costPerUnit,
       };
     });
 
-    // ── Apply investor adjustments ────────────────────────────────────────────
-    const investorSale = isInvestorSale(clientId);
-    let amortizationTotal    = 0;
-    let benefitDiscountTotal = 0;
-    let investorPayload      = null;
+    // Investor adjustments
+    let investorData     = null;
+    let amortizationTotal = 0;
 
     if (investorSale) {
-      const adj = computeInvestorAdjustments(lines, effectiveInvestorDebt());
-      lines                = adj.adjustedLines;
-      amortizationTotal    = adj.amortizationTotal;
-      benefitDiscountTotal = adj.benefitDiscountTotal;
-      investorPayload      = { benefitDiscountTotal, amortizationTotal };
+      const enriched = lines.map(l => ({
+        ...l,
+        lineRevenue: l.lineRevenue,
+        lineCost:    l.lineCost,
+      }));
+      const adj = computeInvestorAdjustments(enriched, effectiveInvestorDebt());
+      amortizationTotal = adj.amortizationTotal;
+      investorData = {
+        benefitDiscountTotal: adj.benefitDiscountTotal,
+        amortizationTotal:    adj.amortizationTotal,
+      };
     }
 
-    const totals = computeTotals(lines);
+    const totals = computeTotals(
+      investorSale
+        ? computeInvestorAdjustments(lines, effectiveInvestorDebt()).adjustedLines
+        : lines
+    );
+
     const payload = {
-      saleDate, clientId, invoiceNumber, notes,
-      status: 'confirmed',
-      totals, lines,
-      attachments: [...currentAttachments],
-      investor: investorPayload,
+      saleDate,
+      month,
+      clientId,
+      invoiceNumber: invoiceNumber || null,
+      notes:         notes         || null,
+      status:        'confirmed',
+      totals,
+      lines,
+      attachments:   currentAttachments,
+      investor:      investorData,
     };
 
     if (editingSale) {
       // ── EDIT PATH ─────────────────────────────────────────────────────────
-      await applyInventoryDeltas(editingSale.lines, lines, editingSale.id);
+      const wasInvestor = isInvestorSale(editingSale.clientId);
+
+      // Delta inventory for manufactured lines
+      const oldLines    = editingSale.lines || [];
+      const oldLineMap  = new Map(
+        oldLines.filter(l => l.productType === 'manufactured')
+                .map(l => [String(l.productId), l.quantity])
+      );
+      for (const line of lines) {
+        if (line.productType !== 'manufactured') continue;
+        const product  = productMap.get(String(line.productId));
+        if (!product) continue;
+        const invItemId = await ensureProductInventoryItem(product);
+        const oldQty    = oldLineMap.get(String(line.productId)) || 0;
+        const delta     = line.quantity - oldQty;
+        if (delta > 0)      await InventoryAPI.removeStock(invItemId, delta,  editingSale.id, 'Edición de venta');
+        else if (delta < 0) await InventoryAPI.addStock(invItemId,  -delta, editingSale.id, 'Edición de venta (devolución parcial)');
+      }
+      // Return stock for lines removed entirely
+      for (const [pId, oldQty] of oldLineMap) {
+        const stillPresent = lines.find(l => String(l.productId) === pId && l.productType === 'manufactured');
+        if (!stillPresent) {
+          const product = productMap.get(pId);
+          if (!product) continue;
+          const invItemId = await ensureProductInventoryItem(product);
+          await InventoryAPI.addStock(invItemId, oldQty, editingSale.id, 'Edición de venta (línea eliminada)');
+        }
+      }
+
       await SalesAPI.update(editingSale.id, payload);
 
-      const wasInvestor = isInvestorSale(editingSale.clientId);
-      if (investorSale) {
-        // Still investor — reconcile amortization (handles same/more/less)
+      if (investorSale && amortizationTotal > 0) {
         await InvestorAPI.setSaleAmortization(
           editingSale.id,
           amortizationTotal,
-          `Ajustado por edición de venta${invoiceNumber ? ' ' + invoiceNumber : ''}`
+          `Amortización automática${invoiceNumber ? ' — ' + invoiceNumber : ''}`
         );
       } else if (wasInvestor) {
-        // Client changed away from investor — reverse all amortization for this sale
         await InvestorAPI.clearSaleAmortization(
           editingSale.id,
           'Cliente cambiado; amortización revertida'
@@ -659,7 +1103,6 @@ async function handleFormSubmit(e) {
 
       const newSale = await SalesAPI.create(payload);
 
-      // Inventory deductions for manufactured lines
       for (const line of lines) {
         if (line.productType !== 'manufactured') continue;
         const product = productMap.get(String(line.productId));
@@ -668,7 +1111,6 @@ async function handleFormSubmit(e) {
         await InventoryAPI.removeStock(invItemId, line.quantity, newSale.id, 'Venta');
       }
 
-      // Investor debt paydown
       if (investorSale && amortizationTotal > 0) {
         await InvestorAPI.setSaleAmortization(
           newSale.id,
@@ -721,7 +1163,9 @@ function handleEdit(saleId) {
       productId:  line.productId,
       quantity:   line.quantity,
       unitPrice:  line.unitPrice,
-      resaleCost: isResale ? (line.resaleCostPerUnitInput ?? line.costPerUnitSnapshot) : '',
+      resaleCost: isResale
+        ? (line.resaleCostPerUnitInput ?? line.costPerUnitSnapshot)
+        : '',
     });
   });
 
@@ -748,10 +1192,14 @@ async function handleDelete(saleId) {
   const amortNote = sale.investor?.amortizationTotal > 0
     ? `\n\nSe revertirán ${formatCurrency(sale.investor.amortizationTotal)} de amortización de deuda.`
     : '';
+  const paymentsForSale = _paymentsMap.get(String(saleId)) || [];
+  const payNote = paymentsForSale.length > 0
+    ? `\n\nSe eliminarán ${paymentsForSale.length} pago(s) registrado(s).`
+    : '';
 
   if (!confirm(
     `¿Eliminar la venta del ${formatDate(sale.saleDate)} para ${clientLbl}?` +
-    `\n\nEsto devolverá el stock de productos manufacturados al inventario.${amortNote}`
+    `\n\nEsto devolverá el stock de productos manufacturados al inventario.${amortNote}${payNote}`
   )) return;
 
   try {
@@ -765,12 +1213,15 @@ async function handleDelete(saleId) {
         'Reverso por eliminación de venta');
     }
 
-    // Reverse investor amortization if this sale had any
+    // Reverse investor amortization
     const hadAmort = (sale.investor?.amortizationTotal || 0) > 0;
     const wasInv   = isInvestorSale(sale.clientId);
     if (hadAmort || wasInv) {
       await InvestorAPI.clearSaleAmortization(saleId, 'Reversión por eliminación de venta');
     }
+
+    // Remove payments for this sale
+    await SalePaymentsAPI.removeBySaleId(saleId);
 
     await SalesAPI.remove(saleId);
     showFeedback('Venta eliminada y stock restaurado.', 'success');
@@ -858,42 +1309,44 @@ function buildLineRowHTML(data = {}) {
     <td>
       <div class="select-wrapper" style="min-width:160px;">
         <select class="form-input form-select form-input--sm sl-product" required>
-          <option value="" disabled ${!data.productId ? 'selected' : ''}>Seleccionar…</option>
+          <option value="" disabled ${!data.productId ? 'selected' : ''}>Producto…</option>
           ${productOptions}
         </select>
       </div>
     </td>
     <td>
-      <input class="form-input form-input--sm sl-qty" type="number"
-        min="1" step="1" placeholder="0" style="width:80px;text-align:right;"
-        value="${escapeHTML(String(data.quantity || ''))}">
+      <input class="form-input form-input--sm text-right sl-qty"
+        type="number" min="1" step="1" placeholder="0"
+        value="${escapeHTML(String(data.quantity || ''))}" style="width:80px;">
     </td>
     <td>
-      <input class="form-input form-input--sm sl-price" type="number"
-        min="0" step="0.01" placeholder="0.00" style="width:100px;text-align:right;"
-        value="${escapeHTML(String(data.unitPrice || ''))}">
+      <input class="form-input form-input--sm text-right sl-price"
+        type="number" min="0" step="0.01" placeholder="0.00"
+        value="${escapeHTML(String(data.unitPrice || ''))}" style="width:100px;">
     </td>
     <td>
-      <input class="form-input form-input--sm sl-resale-cost" type="number"
-        min="0" step="0.01" placeholder="0.00"
-        style="width:100px;text-align:right;${resaleStyle}"
-        value="${escapeHTML(String(data.resaleCost || ''))}">
-      <span class="sl-mfg-cost-note"
-        style="font-size:0.75rem;color:var(--color-text-muted);${mfgStyle}">del mes</span>
+      <input class="form-input form-input--sm text-right sl-resale-cost"
+        type="number" min="0" step="0.01" placeholder="0.00"
+        value="${escapeHTML(String(data.resaleCost || ''))}"
+        style="width:100px;${resaleStyle}">
+      <span class="sl-mfg-cost-note" style="${mfgStyle}color:var(--color-text-muted);font-size:0.75rem;">
+        (mensual)
+      </span>
     </td>
     <td class="text-right sl-preview-revenue" style="font-size:0.85rem;">—</td>
     <td class="text-right sl-preview-cost"    style="font-size:0.85rem;">—</td>
     <td class="text-right sl-preview-profit"  style="font-size:0.85rem;">—</td>
     <td>
       <button type="button" class="btn btn--danger btn--xs sl-remove-btn"
-        title="Eliminar línea">✕</button>
+        title="Quitar línea">✕</button>
     </td>
   `;
 }
 
 function toggleResaleCostInput(rowEl) {
-  const product  = productMap.get(String(rowEl.querySelector('.sl-product').value));
-  const isResale = product ? product.type === 'resale' : false;
+  const productId = rowEl.querySelector('.sl-product').value;
+  const product   = productMap.get(String(productId));
+  const isResale  = product ? product.type === 'resale' : false;
   rowEl.querySelector('.sl-resale-cost').style.display   = isResale ? '' : 'none';
   rowEl.querySelector('.sl-mfg-cost-note').style.display = isResale ? 'none' : '';
 }
@@ -917,8 +1370,6 @@ function updateLinePreview(rowEl) {
     lineCost = qty * costPerPackage;
   }
 
-  // Show max investor discount in row preview (benefit + full paydown)
-  // Totals preview is authoritative for the cumulative debt-cutoff logic.
   const invDiscount = (invSale && !isResale)
     ? (INVESTOR_BENEFIT_PER_PKG + INVESTOR_PAYDOWN_PER_PKG) * qty
     : 0;
@@ -953,7 +1404,6 @@ function updateTotalsPreview() {
 
   const rawLines = collectLines();
 
-  // Enrich with cost data
   const enriched = rawLines.map(l => {
     const product  = productMap.get(String(l.productId));
     const pType    = product ? product.type : 'manufactured';
@@ -987,7 +1437,6 @@ function updateTotalsPreview() {
   document.getElementById('preview-margin').textContent =
     revenue > 0 ? margin.toFixed(1) + '%' : '—';
 
-  // Investor discount rows
   const benefitWrap = document.getElementById('inv-preview-benefit-wrap');
   const paydownWrap = document.getElementById('inv-preview-paydown-wrap');
   const showInv     = invSale && (benefitDiscountTotal > 0 || amortizationTotal > 0);
@@ -1018,15 +1467,17 @@ function handleFileInput(files) {
       showFeedback(
         `"${file.name}" supera ${MAX_ATTACH_MB} MB. ` +
         'Los archivos se almacenan en localStorage y deben ser pequeños.',
-        'warning', 7000
+        'warning', 6000
       );
       continue;
     }
     const reader = new FileReader();
     reader.onload = ev => {
       currentAttachments.push({
-        id:      `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        name:    file.name, mime: file.type, size: file.size,
+        id:      crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
+        name:    file.name,
+        size:    file.size,
+        type:    file.type,
         dataUrl: ev.target.result,
       });
       renderAttachmentList();
@@ -1039,15 +1490,13 @@ function handleFileInput(files) {
 function renderAttachmentList() {
   const container = document.getElementById('sales-attach-list');
   if (!container) return;
-
   if (!currentAttachments.length) {
-    container.innerHTML = '<p class="form-hint" style="margin:0;">Sin archivos adjuntos.</p>';
+    container.innerHTML = '';
     return;
   }
-
   container.innerHTML = currentAttachments.map(att => `
     <div class="sales-attach-chip">
-      <span class="sales-attach-icon">${att.mime === 'application/pdf' ? '📄' : '🖼'}</span>
+      <span class="sales-attach-icon">${att.type === 'application/pdf' ? '📄' : '🖼'}</span>
       <span class="sales-attach-name" title="${escapeHTML(att.name)}">${escapeHTML(att.name)}</span>
       <span class="sales-attach-size">${formatFileSize(att.size)}</span>
       <a href="${att.dataUrl}" target="_blank" rel="noopener"
@@ -1102,82 +1551,43 @@ async function validateManufacturedStock(lines) {
       );
     }
   }
-  return insufficient.length ? `Stock insuficiente:\n• ${insufficient.join('\n• ')}` : null;
-}
-
-async function applyInventoryDeltas(oldLines, newLines, saleId) {
-  const oldMap = new Map();
-  for (const line of (oldLines || [])) {
-    if (line.productType !== 'manufactured') continue;
-    const product = productMap.get(String(line.productId));
-    if (!product) continue;
-    const id = await ensureProductInventoryItem(product);
-    oldMap.set(id, (oldMap.get(id) || 0) + line.quantity);
-  }
-
-  const newMap = new Map();
-  for (const line of newLines) {
-    if (line.productType !== 'manufactured') continue;
-    const product = productMap.get(String(line.productId));
-    if (!product) continue;
-    const id = await ensureProductInventoryItem(product);
-    newMap.set(id, (newMap.get(id) || 0) + line.quantity);
-  }
-
-  const allIds = new Set([...oldMap.keys(), ...newMap.keys()]);
-
-  const insufficient = [];
-  for (const id of allIds) {
-    const delta = (newMap.get(id) || 0) - (oldMap.get(id) || 0);
-    if (delta <= 0) continue;
-    const item = await InventoryAPI.getById(id);
-    if (item && item.stock < delta) {
-      insufficient.push(`${item.name || id}: necesario ${delta}, disponible ${item.stock}.`);
-    }
-  }
-  if (insufficient.length) {
-    throw new Error(`Stock insuficiente para el ajuste:\n• ${insufficient.join('\n• ')}`);
-  }
-
-  for (const id of allIds) {
-    const delta = (newMap.get(id) || 0) - (oldMap.get(id) || 0);
-    if (delta > 0) {
-      await InventoryAPI.removeStock(id, delta, saleId, 'Ajuste por edición de venta');
-    } else if (delta < 0) {
-      await InventoryAPI.addStock(id, Math.abs(delta), saleId, 'Reverso por edición de venta');
-    }
-  }
+  return insufficient.length
+    ? `Stock insuficiente:\n${insufficient.join('\n')}`
+    : null;
 }
 
 // ─── Monthly Cost Calculation ─────────────────────────────────────────────────
-// Mirror of dashboard.js formula — no cross-module import dependency.
 
 function computeMonthlyCostPerPackage(month) {
-  const monthRecs = _allProduction.filter(r => (r.productionDate || '').startsWith(month));
-  const totalPkgs = monthRecs.reduce((s, r) => s + (r.quantity || 0), 0);
-  const laborCost = monthRecs.reduce(
-    (s, r) => s + (r.quantity || 0) * (r.operatorRateSnapshot || 0), 0
-  );
+  const monthRecords = _allProduction.filter(r => (r.month || r.productionDate?.slice(0,7)) === month);
+  const totalPkgs    = monthRecords.reduce((s, r) => s + (r.quantity || 0), 0);
 
-  const prevMonth  = _prevMonthString(month);
-  const currInv    = _allMonthlyInv.find(r => r.month === month) || null;
-  const prevInv    = _allMonthlyInv.find(r => r.month === prevMonth) || null;
-  const monthPurch = _allPurchases.filter(r => (r.date || '').startsWith(month));
+  if (totalPkgs === 0) return { costPerPackage: 0, missing: true };
+
+  const laborCost = monthRecords.reduce((s, r) =>
+    s + (r.operatorRateSnapshot || 0) * (r.quantity || 0), 0);
+
+  const prevMonth = _prevMonthString(month);
+  const prevInv   = _allMonthlyInv.find(i => i.month === prevMonth);
+  const currInv   = _allMonthlyInv.find(i => i.month === month);
 
   const materialCost = ['recycled', 'pellet'].reduce((acc, type) => {
-    const tp       = monthPurch.filter(r => r.materialType === type);
-    const pLbs     = tp.reduce((s, r) => s + (r.weightLbs || 0), 0);
-    const pCost    = tp.reduce((s, r) => s + (r.totalCost || 0) + (r.washingCost || 0), 0);
-    const avgCost  = pLbs > 0 ? pCost / pLbs : 0;
-    const key      = type === 'recycled' ? 'recycledClosingLbs' : 'pelletClosingLbs';
-    const openLbs  = prevInv ? (prevInv[key] || 0) : 0;
+    const pLbs  = _allPurchases
+      .filter(p => p.month === month && p.materialType === type)
+      .reduce((s, p) => s + (p.washedWeightLbs || p.weightLbs || 0), 0);
+    const pCost = _allPurchases
+      .filter(p => p.month === month && p.materialType === type)
+      .reduce((s, p) => s + (p.totalCost || 0) + (p.washingCost || 0), 0);
+    const avgCost = pLbs > 0 ? pCost / pLbs : 0;
+    const key     = type === 'recycled' ? 'recycledClosingLbs' : 'pelletClosingLbs';
+    const openLbs = prevInv ? (prevInv[key] || 0) : 0;
     const closeLbs = currInv ? (currInv[key] || 0) : 0;
     return acc + (openLbs + pLbs - closeLbs) * avgCost;
   }, 0);
 
   const totalCost      = laborCost + materialCost;
   const costPerPackage = totalPkgs > 0 ? totalCost / totalPkgs : 0;
-  return { costPerPackage, missing: costPerPackage === 0 && totalPkgs === 0 };
+  return { costPerPackage, missing: costPerPackage === 0 };
 }
 
 function _prevMonthString(ym) {
@@ -1328,6 +1738,7 @@ function injectStyles() {
   const tag = document.createElement('style');
   tag.id = 'sales-module-styles';
   tag.textContent = `
+    /* ── Form ── */
     .sales-lines-section {
       border-top: 1px solid var(--color-border);
       margin-top: var(--space-lg); padding-top: var(--space-lg);
@@ -1358,7 +1769,7 @@ function injectStyles() {
     }
     .sales-total-investor { color: var(--color-primary, #6c63ff) !important; }
 
-    /* Investor banner */
+    /* ── Investor banner ── */
     .sales-investor-banner {
       display: flex; align-items: flex-start; gap: var(--space-sm);
       margin-top: var(--space-md); padding: var(--space-sm) var(--space-md);
@@ -1373,7 +1784,7 @@ function injectStyles() {
       font-weight: 600; color: var(--color-primary, #6c63ff);
     }
 
-    /* Investor badge in table */
+    /* ── Investor badge in table ── */
     .badge--investor {
       background: color-mix(in srgb, var(--color-primary, #6c63ff) 15%, transparent);
       color: var(--color-primary, #6c63ff);
@@ -1381,7 +1792,29 @@ function injectStyles() {
       font-size: 0.7rem; padding: 1px 5px; border-radius: 3px;
     }
 
-    /* Attachments */
+    /* ── AR status badges ── */
+    .badge--ar-paid {
+      background: color-mix(in srgb, var(--color-success, #38a169) 15%, transparent);
+      color: var(--color-success, #38a169);
+      border: 1px solid color-mix(in srgb, var(--color-success, #38a169) 40%, transparent);
+    }
+    .badge--ar-partial {
+      background: color-mix(in srgb, #d69e2e 12%, transparent);
+      color: #d69e2e;
+      border: 1px solid color-mix(in srgb, #d69e2e 35%, transparent);
+    }
+    .badge--ar-unpaid {
+      background: color-mix(in srgb, var(--color-danger, #e53e3e) 12%, transparent);
+      color: var(--color-danger, #e53e3e);
+      border: 1px solid color-mix(in srgb, var(--color-danger, #e53e3e) 35%, transparent);
+    }
+    .ar-status-btn {
+      cursor: pointer; display: inline-block;
+      transition: opacity .15s;
+    }
+    .ar-status-btn:hover { opacity: 0.75; }
+
+    /* ── Attachments ── */
     .sales-attach-section {
       border-top: 1px solid var(--color-border);
       margin-top: var(--space-lg); padding-top: var(--space-lg);
@@ -1402,6 +1835,111 @@ function injectStyles() {
       white-space: nowrap; font-size: 0.85rem;
     }
     .sales-attach-size { font-size: 0.75rem; color: var(--color-text-muted); flex-shrink: 0; }
+
+    /* ════════════════════════════════════════
+       AR MODAL
+       ════════════════════════════════════════ */
+    .ar-modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0, 0, 0, 0.65);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 2000; padding: var(--space-md);
+    }
+    .ar-modal {
+      background: var(--color-bg-card, var(--color-surface));
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-lg);
+      width: 100%; max-width: 680px;
+      max-height: 90vh; overflow-y: auto;
+      display: flex; flex-direction: column;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.45);
+    }
+    .ar-modal__header {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      padding: var(--space-lg) var(--space-xl);
+      border-bottom: 1px solid var(--color-border);
+      gap: var(--space-md);
+    }
+    .ar-modal__title {
+      margin: 0; font-size: 1.05rem; font-weight: 700; color: var(--color-text);
+    }
+    .ar-modal__close {
+      background: none; border: none;
+      color: var(--color-text-muted); font-size: 1.15rem;
+      cursor: pointer; padding: 4px 8px; flex-shrink: 0;
+      border-radius: var(--radius-sm);
+      transition: background .15s, color .15s;
+    }
+    .ar-modal__close:hover {
+      background: var(--color-surface); color: var(--color-text);
+    }
+
+    /* ── Summary bar ── */
+    .ar-summary-bar {
+      padding: var(--space-md) var(--space-xl);
+      border-bottom: 1px solid var(--color-border);
+      background: color-mix(in srgb, var(--color-surface) 60%, transparent);
+    }
+    .ar-summary-row {
+      display: flex; gap: var(--space-lg); flex-wrap: wrap;
+      margin-bottom: var(--space-sm); align-items: center;
+    }
+    .ar-summary-kpi { display: flex; flex-direction: column; gap: 2px; min-width: 110px; }
+    .ar-summary-kpi__label {
+      font-size: 0.72rem; color: var(--color-text-muted);
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .ar-summary-kpi__value {
+      font-size: 1rem; font-weight: 700; color: var(--color-text);
+    }
+    .ar-summary-kpi__value--paid    { color: var(--color-success, #38a169); }
+    .ar-summary-kpi__value--balance { color: var(--color-danger, #e53e3e); }
+
+    /* Progress bar */
+    .ar-progress-track {
+      height: 6px; border-radius: 99px;
+      background: var(--color-border);
+      overflow: hidden;
+    }
+    .ar-progress-bar {
+      height: 100%; border-radius: 99px;
+      transition: width .4s ease;
+    }
+    .ar-progress--paid    { background: var(--color-success, #38a169); }
+    .ar-progress--partial { background: #d69e2e; }
+    .ar-progress--unpaid  { background: var(--color-danger, #e53e3e); }
+
+    /* ── Sections ── */
+    .ar-payments-section {
+      padding: var(--space-md) var(--space-xl);
+      border-bottom: 1px solid var(--color-border);
+      flex: 1; overflow-y: auto;
+    }
+    .ar-add-section {
+      padding: var(--space-md) var(--space-xl) var(--space-xl);
+    }
+    .ar-section-title {
+      font-size: 0.78rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--color-text-muted);
+      margin-bottom: var(--space-sm);
+    }
+
+    /* ── Payments table ── */
+    .ar-payments-table { margin: 0; }
+    .ar-payments-table th,
+    .ar-payments-table td { padding: var(--space-xs) var(--space-sm); font-size: 0.85rem; }
+
+    /* ── Add payment form grid ── */
+    .ar-form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--space-md);
+    }
+    @media (max-width: 500px) {
+      .ar-form-grid { grid-template-columns: 1fr; }
+      .ar-modal { max-width: 100%; max-height: 100vh; border-radius: 0; }
+    }
   `;
   document.head.appendChild(tag);
 }
