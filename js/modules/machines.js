@@ -15,7 +15,7 @@
  * No business logic lives here.
  */
 
-import { MachinesAPI } from '../api.js';
+import { MachinesAPI, ChangeHistoryAPI } from '../api.js';
 
 // ─── Module State ─────────────────────────────────────────────────────────────
 
@@ -356,10 +356,21 @@ async function handleFormSubmit(e) {
       // ── Edit mode → update
       await MachinesAPI.update(editingMachine.id, payload);
       showFeedback('Máquina actualizada correctamente.', 'success');
+
+      const changes = _buildDiff(editingMachine, payload, ['name', 'code', 'notes', 'isActive']);
+      ChangeHistoryAPI.log({
+        entity_type: 'machine', entity_id: editingMachine.id,
+        entity_name: payload.name, action: 'editar', changes,
+      });
     } else {
       // ── Create mode → create
-      await MachinesAPI.create(payload);
+      const result = await MachinesAPI.create(payload);
       showFeedback('Máquina creada correctamente.', 'success');
+
+      ChangeHistoryAPI.log({
+        entity_type: 'machine', entity_id: result?.id ?? '',
+        entity_name: payload.name, action: 'crear', changes: null,
+      });
     }
 
     resetFormToCreateMode();
@@ -418,6 +429,8 @@ async function handleToggleStatus(machineId, currentlyActive) {
   if (!confirm(`¿Deseas ${verb} esta máquina?`)) return;
 
   try {
+    const machine = allMachines.find(m => String(m.id) === String(machineId));
+
     if (currentlyActive) {
       await MachinesAPI.deactivate(machineId);
       showFeedback('Máquina desactivada.', 'warning');
@@ -425,6 +438,13 @@ async function handleToggleStatus(machineId, currentlyActive) {
       await MachinesAPI.activate(machineId);
       showFeedback('Máquina activada.', 'success');
     }
+
+    ChangeHistoryAPI.log({
+      entity_type: 'machine', entity_id: machineId,
+      entity_name: machine?.name ?? '',
+      action: currentlyActive ? 'desactivar' : 'activar',
+      changes: { isActive: { before: currentlyActive, after: !currentlyActive } },
+    });
 
     // If this machine was open in the edit form, refresh its displayed status
     if (editingMachine && String(editingMachine.id) === String(machineId)) {
@@ -594,6 +614,17 @@ function showFieldError(errorId, message) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Build a field-level diff between the original record and the new payload. */
+function _buildDiff(original, updated, fields) {
+  const diff = {};
+  for (const f of fields) {
+    if (String(original[f] ?? '') !== String(updated[f] ?? '')) {
+      diff[f] = { before: original[f], after: updated[f] };
+    }
+  }
+  return Object.keys(diff).length > 0 ? diff : null;
+}
 
 /**
  * Collect form values into a plain machine payload object.

@@ -121,6 +121,14 @@ const ROUTES = {
       await mountReports(container);
     },
   },
+
+  changelog: {
+    title: 'Historial de Cambios — CapFlow',
+    loader: async (container) => {
+      const { mountChangelog } = await import('./modules/changelog.js');
+      await mountChangelog(container);
+    },
+  },
 };
 
 const DEFAULT_ROUTE = 'dashboard';
