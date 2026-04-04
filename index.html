@@ -57,6 +57,9 @@
         <a class="sidebar__link" data-route="investor" href="#investor" aria-current="false">
           <span class="sidebar__link-icon">◇</span> Inversionista
         </a>
+        <a class="sidebar__link" data-route="changelog" href="#changelog" aria-current="false">
+          <span class="sidebar__link-icon">◷</span> Historial
+        </a>
 
       </div>
     </nav>
@@ -68,6 +71,9 @@
     </main>
 
   </div>
+
+  <!-- Toast notifications (used by modules that don't have inline banners) -->
+  <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
 
   <!-- App entry point (module type enables ES module imports) -->
   <script type="module" src="js/app.js"></script>
