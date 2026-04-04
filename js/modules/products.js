@@ -21,7 +21,7 @@
  * No business logic lives here.
  */
 
-import { ProductsAPI } from '../api.js';
+import { ProductsAPI, ChangeHistoryAPI } from '../api.js';
 
 // ─── Module State ─────────────────────────────────────────────────────────────
 
@@ -361,10 +361,21 @@ async function handleFormSubmit(e) {
       // ── Edit mode → PUT
       await ProductsAPI.update(editingProduct.id, payload);
       showFeedback('Producto actualizado correctamente.', 'success');
+
+      const changes = _buildDiff(editingProduct, payload, ['name', 'type', 'active']);
+      ChangeHistoryAPI.log({
+        entity_type: 'product', entity_id: editingProduct.id,
+        entity_name: payload.name, action: 'editar', changes,
+      });
     } else {
       // ── Create mode → POST
-      await ProductsAPI.create(payload);
+      const result = await ProductsAPI.create(payload);
       showFeedback('Producto creado correctamente.', 'success');
+
+      ChangeHistoryAPI.log({
+        entity_type: 'product', entity_id: result?.id ?? '',
+        entity_name: payload.name, action: 'crear', changes: null,
+      });
     }
 
     resetFormToCreateMode();
@@ -415,10 +426,20 @@ async function handleToggleStatus(productId, currentlyActive) {
 
   if (!confirm(`¿Deseas ${verb} este producto?`)) return;
 
+  const product = allProducts.find(p => String(p.id) === String(productId));
+
   try {
     await ProductsAPI.setStatus(productId, !currentlyActive);
     const msg = currentlyActive ? 'Producto desactivado.' : 'Producto activado.';
     showFeedback(msg, 'success');
+
+    ChangeHistoryAPI.log({
+      entity_type: 'product', entity_id: productId,
+      entity_name: product?.name ?? '',
+      action: currentlyActive ? 'desactivar' : 'activar',
+      changes: { active: { before: currentlyActive, after: !currentlyActive } },
+    });
+
     await loadProducts();
   } catch (err) {
     showFeedback(`Error al cambiar estado: ${err.message}`, 'error');
@@ -441,6 +462,11 @@ async function handleDelete(productId, productName) {
   try {
     await ProductsAPI.remove(productId);
     showFeedback(`Producto "${productName}" eliminado.`, 'success');
+
+    ChangeHistoryAPI.log({
+      entity_type: 'product', entity_id: productId,
+      entity_name: productName, action: 'eliminar', changes: null,
+    });
 
     // If we were editing this product, reset the form
     if (editingProduct && String(editingProduct.id) === String(productId)) {
@@ -575,6 +601,17 @@ function showFieldError(errorId, message) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Build a field-level diff between the original record and the new payload. */
+function _buildDiff(original, updated, fields) {
+  const diff = {};
+  for (const f of fields) {
+    if (String(original[f] ?? '') !== String(updated[f] ?? '')) {
+      diff[f] = { before: original[f], after: updated[f] };
+    }
+  }
+  return Object.keys(diff).length > 0 ? diff : null;
+}
 
 /**
  * Collect form values into a plain payload object.

@@ -1634,3 +1634,63 @@ export const SalePaymentsAPI = {
     return null;
   },
 };
+
+
+// =============================================================================
+// CHANGE HISTORY  (audit log)
+//
+// DB: id (uuid), entity_type, entity_id, entity_name, action, changes (jsonb),
+//     created_at
+// =============================================================================
+
+export const ChangeHistoryAPI = {
+  /**
+   * Log a change event.  Failures are caught silently so they never block the
+   * main user action.
+   *
+   * @param {Object} entry
+   * @param {string} entry.entity_type  - 'product' | 'machine' | etc.
+   * @param {string} entry.entity_id    - Record ID
+   * @param {string} entry.entity_name  - Human-readable name
+   * @param {string} entry.action       - 'crear' | 'editar' | 'activar' | 'desactivar' | 'eliminar'
+   * @param {Object} [entry.changes]    - { field: { before, after } }
+   */
+  async log(entry) {
+    try {
+      const { error } = await _sb.from('change_history').insert({
+        entity_type: entry.entity_type,
+        entity_id:   String(entry.entity_id ?? ''),
+        entity_name: entry.entity_name ?? '',
+        action:      entry.action,
+        changes:     entry.changes ?? null,
+      });
+      if (error) console.warn('[CapFlow] Change log error:', error.message);
+    } catch (err) {
+      console.warn('[CapFlow] Change log failed:', err.message);
+    }
+  },
+
+  /**
+   * Fetch recent change history entries.
+   *
+   * @param {Object}  [opts]
+   * @param {string}  [opts.entity_type] - Filter by entity type
+   * @param {number}  [opts.limit=200]   - Max records
+   * @returns {Promise<Array>}
+   */
+  async getAll({ entity_type, limit = 200 } = {}) {
+    let query = _sb
+      .from('change_history')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (entity_type) {
+      query = query.eq('entity_type', entity_type);
+    }
+
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  },
+};
