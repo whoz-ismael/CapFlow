@@ -27,12 +27,13 @@
  * No business logic (payroll, invoicing) lives here.
  */
 
-import { ProductionAPI } from '../api.js';
-import { MachinesAPI }   from '../api.js';
-import { ProductsAPI }   from '../api.js';
-import { OperatorsAPI }  from '../api.js';
+import { ProductionAPI }    from '../api.js';
+import { MachinesAPI }      from '../api.js';
+import { ProductsAPI }      from '../api.js';
+import { OperatorsAPI }     from '../api.js';
 import { InventoryAPI }               from '../api.js';
 import { ensureProductInventoryItem } from '../api.js';
+import { PackageWeightsAPI } from '../api.js';
 
 // ─── Module State ─────────────────────────────────────────────────────────────
 
@@ -76,7 +77,7 @@ export async function mountProduction(container) {
   await loadDependencies();      // populate dropdowns + build lookup maps
   attachFormListeners();
   resetFormToCreateMode();       // set default field values (incl. rate = 70)
-  await loadRecords();
+  await Promise.all([loadRecords(), loadPackageWeights()]);
 }
 
 // ─── HTML Builders ────────────────────────────────────────────────────────────
@@ -271,6 +272,22 @@ function buildModuleHTML() {
             </button>
           </div>
         </form>
+      </div>
+
+      <!-- ── Package Weights Reference Card ── -->
+      <div class="card" id="package-weights-card">
+        <div class="card__header">
+          <h2 class="card__title">
+            <span class="card__title-icon">⚖</span>
+            Pesos de Paquetes Registrados
+          </h2>
+          <span style="font-size:0.75rem;color:var(--color-text-muted);align-self:center;">
+            Referencia para el campo "Peso por Paquete"
+          </span>
+        </div>
+        <div id="package-weights-list">
+          <p style="color:var(--color-text-muted);padding:var(--space-md) 0;">Cargando…</p>
+        </div>
       </div>
 
       <!-- ── Filter Card ── -->
@@ -510,6 +527,64 @@ async function loadRecords() {
   } catch (err) {
     showFeedback(`Error al cargar registros: ${err.message}`, 'error');
     showTableLoading(false);
+  }
+}
+
+// ─── Package Weights Reference ────────────────────────────────────────────────
+
+/**
+ * Load and render the 10 most recent package weight records from CapDispatch.
+ * These are displayed as a read-only reference so the user knows what value
+ * to enter in the "Peso por Paquete (lb)" field when creating a production record.
+ */
+async function loadPackageWeights() {
+  const container = document.getElementById('package-weights-list');
+  if (!container) return;
+
+  try {
+    const records = await PackageWeightsAPI.getRecent(10);
+
+    if (!records || records.length === 0) {
+      container.innerHTML = `
+        <p style="color:var(--color-text-muted);padding:var(--space-md) 0;font-size:0.875rem;">
+          Aún no hay pesos registrados por los operarios.
+        </p>`;
+      return;
+    }
+
+    const fmt = (dateStr) => {
+      const [y, m, d] = dateStr.split('-');
+      return `${d}/${m}/${y}`;
+    };
+
+    container.innerHTML = `
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.875rem;">
+          <thead>
+            <tr style="border-bottom:2px solid var(--color-border);">
+              <th style="text-align:left;padding:var(--space-sm) var(--space-md) var(--space-sm) 0;color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Fecha turno</th>
+              <th style="text-align:left;padding:var(--space-sm) var(--space-md);color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Operario</th>
+              <th style="text-align:right;padding:var(--space-sm) var(--space-md);color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Peso (lb)</th>
+              <th style="text-align:left;padding:var(--space-sm) 0 var(--space-sm) var(--space-md);color:var(--color-text-muted);font-weight:600;">Notas</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${records.map(r => `
+              <tr style="border-bottom:1px solid var(--color-border);">
+                <td style="padding:var(--space-sm) var(--space-md) var(--space-sm) 0;white-space:nowrap;">${fmt(r.shift_date)}</td>
+                <td style="padding:var(--space-sm) var(--space-md);white-space:nowrap;">${r.operator_name || '—'}</td>
+                <td style="padding:var(--space-sm) var(--space-md);text-align:right;font-weight:700;color:var(--color-primary);">${parseFloat(r.weight_lbs).toFixed(2)}</td>
+                <td style="padding:var(--space-sm) 0 var(--space-sm) var(--space-md);color:var(--color-text-muted);font-size:0.8rem;">${r.notes || ''}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch (err) {
+    container.innerHTML = `
+      <p style="color:var(--color-danger);padding:var(--space-md) 0;font-size:0.875rem;">
+        Error al cargar los pesos: ${err.message}
+      </p>`;
   }
 }
 

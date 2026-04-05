@@ -348,6 +348,27 @@ export const ProductionAPI = {
   },
 };
 
+// =============================================================================
+// PACKAGE WEIGHTS
+//
+// Registered by CapDispatch operators: weight of a 1,000-cap reference package
+// per shift. Read by CapFlow's Production module to help fill "Peso por Paquete".
+//
+// DB: id, weight_lbs, operator_name, shift_date, notes, created_at
+// =============================================================================
+
+export const PackageWeightsAPI = {
+  async getRecent(limit = 10) {
+    const { data, error } = await _sb
+      .from('package_weights')
+      .select('id, weight_lbs, operator_name, shift_date, notes, created_at')
+      .order('shift_date',  { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+};
 
 // =============================================================================
 // PROVIDERS
