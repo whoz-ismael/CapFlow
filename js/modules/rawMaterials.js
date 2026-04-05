@@ -19,6 +19,8 @@ import { RawMaterialsAPI }                  from '../api.js';
 import { ProvidersAPI }                     from '../api.js';
 import { MonthlyInventoryAPI }              from '../api.js';
 import { ProductionAPI }                    from '../api.js';
+import { MaterialReceiptsAPI }              from '../api.js';
+import { getMaterialTypeLabel, getMaterialTypeBadge } from '../api.js';
 
 // ─── Module State ─────────────────────────────────────────────────────────────
 
@@ -40,6 +42,12 @@ let allProductionRecords = [];
 /** O(1) name lookup: supplierId → provider object. */
 let providerMap = new Map();
 
+/** In-memory cache of pending material receipts from operators. */
+let allPendingReceipts = [];
+
+/** The receipt currently being confirmed (confirm modal state). */
+let confirmingReceipt = null;
+
 /** YYYY-MM of the currently selected month summary. */
 let selectedMonth = '';
 
@@ -57,6 +65,7 @@ export async function mountRawMaterials(container) {
   attachFormListeners();
   attachProviderModalListeners();
   attachInventoryModalListeners();
+  attachConfirmModalListeners();
   resetFormToCreateMode();
 
   await loadAll();
@@ -72,11 +81,12 @@ async function loadAll() {
   showTableLoading(true);
 
   try {
-    [allRecords, allProviders, allInventoryRecords, allProductionRecords] = await Promise.all([
+    [allRecords, allProviders, allInventoryRecords, allProductionRecords, allPendingReceipts] = await Promise.all([
       RawMaterialsAPI.getAll(),
       ProvidersAPI.getAll(),
       MonthlyInventoryAPI.getAll(),
       ProductionAPI.getAll(),
+      MaterialReceiptsAPI.getPending(),
     ]);
 
     // Rebuild lookup map: all providers (active + inactive) for name resolution
@@ -84,6 +94,9 @@ async function loadAll() {
 
     // Repopulate supplier dropdown with active providers only
     populateProviderSelect();
+
+    // Render pending receipts section
+    renderPendingReceipts();
 
     // Render table (newest first) and update badge
     const sorted = [...allRecords].sort((a, b) =>
@@ -202,6 +215,20 @@ function buildModuleHTML() {
         </div>
       </div>
 
+      <!-- ── Pending Receipts Card ── -->
+      <div class="card" id="rm-pending-card">
+        <div class="card__header">
+          <h2 class="card__title">
+            <span class="card__title-icon">⏳</span>
+            Entradas pendientes de operarios
+            <span class="badge badge--warning" id="rm-pending-badge" style="display:none;">0</span>
+          </h2>
+        </div>
+        <div id="rm-pending-body">
+          <!-- Filled by renderPendingReceipts() -->
+        </div>
+      </div>
+
       <!-- ── Purchase Form Card ── -->
       <div class="card" id="rm-form-card">
         <div class="card__header">
@@ -243,7 +270,9 @@ function buildModuleHTML() {
                 <select class="form-input form-select" id="rm-field-type" required>
                   <option value="" disabled selected>Seleccionar tipo…</option>
                   <option value="recycled">Reciclado</option>
-                  <option value="pellet">Pellet virgen</option>
+                  <option value="pellet">Pellet Virgen</option>
+                  <option value="pellet_regular">Pellet</option>
+                  <option value="colorant">Colorante</option>
                 </select>
               </div>
               <span class="form-error" id="rm-error-type"></span>
@@ -446,8 +475,8 @@ function renderTable(records) {
  * @returns {string}
  */
 function buildTableRow(r) {
-  const typeLabel    = r.materialType === 'recycled' ? 'Reciclado' : 'Pellet';
-  const typeBadge    = r.materialType === 'recycled' ? 'badge--teal' : 'badge--blue';
+  const typeLabel    = getMaterialTypeLabel(r.materialType || r.type);
+  const typeBadge    = getMaterialTypeBadge(r.materialType || r.type);
   const costPerLb    = r.weightLbs > 0 ? r.totalCost / r.weightLbs : 0;
   const washingCost  = r.washingCost || 0;
 
@@ -491,6 +520,92 @@ function buildTableRow(r) {
     </tr>
   `;
 }
+
+// ─── Pending Receipts ─────────────────────────────────────────────────────────
+
+/**
+ * Render the pending receipts section with entries from CapDispatch operators.
+ * Each row has a "Confirmar" button that opens the confirm modal.
+ */
+function renderPendingReceipts() {
+  const body  = document.getElementById('rm-pending-body');
+  const badge = document.getElementById('rm-pending-badge');
+  const card  = document.getElementById('rm-pending-card');
+  if (!body) return;
+
+  const count = allPendingReceipts.length;
+
+  // Update badge
+  if (badge) {
+    badge.textContent = count;
+    badge.style.display = count > 0 ? '' : 'none';
+  }
+
+  if (count === 0) {
+    body.innerHTML = `
+      <div class="table-empty" style="display:flex;">
+        <span class="table-empty__icon">✓</span>
+        <p>No hay entradas pendientes de confirmar.</p>
+      </div>
+    `;
+    return;
+  }
+
+  body.innerHTML = `
+    <div class="table-wrapper" style="display:block;">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Fecha entrada</th>
+            <th>Tipo</th>
+            <th class="text-right">Peso (lbs)</th>
+            <th>Operario</th>
+            <th>Notas</th>
+            <th class="text-center">Acción</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${allPendingReceipts.map(r => {
+            const typeLabel = getMaterialTypeLabel(r.type);
+            const typeBadge = getMaterialTypeBadge(r.type);
+            return `
+              <tr class="table-row">
+                <td style="font-family:var(--font-mono);font-size:0.82rem;white-space:nowrap;">
+                  ${escapeHTML(formatDateDisplay(r.receiptDate || r.date))}
+                </td>
+                <td><span class="badge ${typeBadge}">${typeLabel}</span></td>
+                <td class="text-right" style="font-family:var(--font-mono);">
+                  ${formatNumber(r.weightLbs)}
+                </td>
+                <td>${escapeHTML(r.operatorName || '—')}</td>
+                <td style="font-size:0.8rem;color:var(--color-text-muted);">
+                  ${r.notes ? escapeHTML(r.notes) : '<span style="color:var(--color-text-muted);">—</span>'}
+                </td>
+                <td class="text-center">
+                  <button
+                    class="btn btn--primary btn--sm rm-confirm-receipt-btn"
+                    data-receipt-id="${escapeHTML(r.id)}"
+                    style="font-size:0.75rem;padding:4px 12px;"
+                  >✔ Confirmar</button>
+                </td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  // Wire confirm buttons
+  body.querySelectorAll('.rm-confirm-receipt-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const receiptId = btn.dataset.receiptId;
+      const receipt   = allPendingReceipts.find(r => String(r.id) === String(receiptId));
+      if (receipt) openConfirmModal(receipt);
+    });
+  });
+}
+
 
 // ─── Monthly Summary ──────────────────────────────────────────────────────────
 
@@ -1046,6 +1161,329 @@ function resetFormToCreateMode() {
 
   clearFormErrors();
 }
+
+// ─── Confirm Receipt Modal ────────────────────────────────────────────────────
+
+/**
+ * Inject the confirm receipt modal into <body> once.
+ * Idempotent via the id guard.
+ */
+function ensureConfirmModalInDOM() {
+  if (document.getElementById('confirm-receipt-modal')) return;
+
+  const el = document.createElement('div');
+  el.innerHTML = `
+    <div id="confirm-receipt-modal" class="provider-modal provider-modal--hidden"
+         role="dialog" aria-modal="true" aria-labelledby="confirm-receipt-modal-title">
+
+      <div class="provider-modal__backdrop" id="confirm-receipt-modal-backdrop"></div>
+
+      <div class="provider-modal__window">
+
+        <div class="provider-modal__header">
+          <h3 class="provider-modal__title" id="confirm-receipt-modal-title">
+            <span style="color:var(--color-accent);">✔</span>
+            Confirmar entrada de materia prima
+          </h3>
+          <button
+            class="provider-modal__close-btn"
+            id="confirm-receipt-modal-close"
+            aria-label="Cerrar modal"
+            type="button"
+          >✕</button>
+        </div>
+
+        <!-- Receipt summary (read-only) -->
+        <div id="confirm-receipt-summary"
+             style="margin:var(--space-md) var(--space-lg);padding:var(--space-md);
+                    background:var(--color-accent-glow);border:1px solid var(--color-accent-border);
+                    border-radius:var(--radius-md);font-size:0.85rem;line-height:1.8;">
+        </div>
+
+        <div class="provider-modal__body">
+          <p style="font-size:0.8rem;color:var(--color-text-muted);margin-bottom:var(--space-md);">
+            Completa los datos que el operario desconoce para registrar la compra.
+          </p>
+
+          <form id="rm-confirm-form" novalidate>
+            <input type="hidden" id="rm-confirm-receipt-id">
+
+            <!-- Fecha de compra -->
+            <div class="form-group">
+              <label class="form-label" for="rm-confirm-date">
+                Fecha de compra <span class="required">*</span>
+              </label>
+              <input
+                class="form-input"
+                type="date"
+                id="rm-confirm-date"
+                required
+              >
+              <span class="form-error" id="rm-confirm-error-date"></span>
+            </div>
+
+            <!-- Proveedor -->
+            <div class="form-group">
+              <label class="form-label" for="rm-confirm-supplier">
+                Proveedor <span class="required">*</span>
+              </label>
+              <div class="select-wrapper">
+                <select class="form-input form-select" id="rm-confirm-supplier" required>
+                  <option value="" disabled selected>Seleccionar proveedor…</option>
+                </select>
+              </div>
+              <span class="form-error" id="rm-confirm-error-supplier"></span>
+            </div>
+
+            <!-- Costo total -->
+            <div class="form-group">
+              <label class="form-label" for="rm-confirm-cost">
+                Costo total (RD$) <span class="required">*</span>
+              </label>
+              <div class="input-prefix-wrapper">
+                <span class="input-prefix">$</span>
+                <input
+                  class="form-input form-input--prefixed"
+                  type="number"
+                  id="rm-confirm-cost"
+                  placeholder="0.00"
+                  min="0.01"
+                  step="0.01"
+                  required
+                >
+              </div>
+              <span class="form-error" id="rm-confirm-error-cost"></span>
+            </div>
+
+            <!-- Washing fields — shown only when type = recycled -->
+            <div class="form-group" id="rm-confirm-washing-group" style="display:none;">
+              <label class="form-label" for="rm-confirm-washed-weight">
+                Peso lavado (lbs)
+              </label>
+              <input
+                class="form-input"
+                type="number"
+                id="rm-confirm-washed-weight"
+                placeholder="0.00"
+                min="0"
+                step="0.01"
+              >
+              <span class="form-error" id="rm-confirm-error-washed-weight"></span>
+              <span class="form-hint">No puede superar el peso bruto.</span>
+            </div>
+
+            <div class="form-group" id="rm-confirm-washing-cost-group" style="display:none;">
+              <label class="form-label" for="rm-confirm-washing-cost">
+                Costo de lavado (RD$)
+              </label>
+              <div class="input-prefix-wrapper">
+                <span class="input-prefix">$</span>
+                <input
+                  class="form-input form-input--prefixed"
+                  type="number"
+                  id="rm-confirm-washing-cost"
+                  placeholder="0.00"
+                  min="0"
+                  step="0.01"
+                >
+              </div>
+            </div>
+
+          </form>
+        </div>
+
+        <div class="provider-modal__footer">
+          <button type="button" class="btn btn--ghost" id="confirm-receipt-modal-cancel">
+            Cancelar
+          </button>
+          <button type="button" class="btn btn--primary" id="rm-confirm-submit-btn">
+            <span class="btn__icon">✔</span> Confirmar compra
+          </button>
+        </div>
+
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(el.firstElementChild);
+}
+
+/**
+ * Wire listeners for the confirm receipt modal.
+ * Safe to call on each mount — uses named functions + remove/add.
+ */
+function attachConfirmModalListeners() {
+  ensureConfirmModalInDOM();
+
+  const close    = document.getElementById('confirm-receipt-modal-close');
+  const cancel   = document.getElementById('confirm-receipt-modal-cancel');
+  const backdrop = document.getElementById('confirm-receipt-modal-backdrop');
+  const saveBtn  = document.getElementById('rm-confirm-submit-btn');
+  const form     = document.getElementById('rm-confirm-form');
+
+  close.removeEventListener('click', closeConfirmModal);
+  close.addEventListener(   'click', closeConfirmModal);
+
+  cancel.removeEventListener('click', closeConfirmModal);
+  cancel.addEventListener(   'click', closeConfirmModal);
+
+  backdrop.removeEventListener('click', closeConfirmModal);
+  backdrop.addEventListener(   'click', closeConfirmModal);
+
+  document.removeEventListener('keydown', _onConfirmModalEscape);
+  document.addEventListener(   'keydown', _onConfirmModalEscape);
+
+  saveBtn.removeEventListener('click', handleConfirmFormSubmit);
+  saveBtn.addEventListener(   'click', handleConfirmFormSubmit);
+
+  form.removeEventListener('submit', handleConfirmFormSubmit);
+  form.addEventListener(   'submit', handleConfirmFormSubmit);
+}
+
+function _onConfirmModalEscape(e) {
+  if (e.key === 'Escape') {
+    const modal = document.getElementById('confirm-receipt-modal');
+    if (modal && !modal.classList.contains('provider-modal--hidden')) {
+      closeConfirmModal();
+    }
+  }
+}
+
+/**
+ * Open the confirm receipt modal for a given receipt.
+ * @param {Object} receipt
+ */
+function openConfirmModal(receipt) {
+  ensureConfirmModalInDOM();
+  confirmingReceipt = receipt;
+
+  // Reset form
+  document.getElementById('rm-confirm-form').reset();
+  document.querySelectorAll('#rm-confirm-form .form-error')
+    .forEach(el => (el.textContent = ''));
+
+  // Pre-fill hidden id and date
+  document.getElementById('rm-confirm-receipt-id').value = receipt.id;
+  document.getElementById('rm-confirm-date').value = receipt.receiptDate || receipt.date || todayString();
+
+  // Populate supplier dropdown
+  const sel = document.getElementById('rm-confirm-supplier');
+  sel.innerHTML = '<option value="" disabled selected>Seleccionar proveedor…</option>';
+  allProviders
+    .filter(p => p.isActive !== false)
+    .forEach(p => {
+      const opt = document.createElement('option');
+      opt.value       = p.id;
+      opt.textContent = p.name;
+      sel.appendChild(opt);
+    });
+
+  // Show/hide washing fields based on type
+  const isRecycled = receipt.type === 'recycled';
+  document.getElementById('rm-confirm-washing-group').style.display      = isRecycled ? '' : 'none';
+  document.getElementById('rm-confirm-washing-cost-group').style.display = isRecycled ? '' : 'none';
+
+  // Show receipt summary
+  const typeLabel = getMaterialTypeLabel(receipt.type);
+  document.getElementById('confirm-receipt-summary').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-sm);">
+      <div><span style="color:var(--color-text-muted);">Tipo:</span> <strong>${escapeHTML(typeLabel)}</strong></div>
+      <div><span style="color:var(--color-text-muted);">Peso:</span> <strong>${formatNumber(receipt.weightLbs)} lbs</strong></div>
+      <div><span style="color:var(--color-text-muted);">Fecha entrada:</span> <strong>${escapeHTML(formatDateDisplay(receipt.receiptDate || receipt.date))}</strong></div>
+      <div><span style="color:var(--color-text-muted);">Operario:</span> <strong>${escapeHTML(receipt.operatorName || '—')}</strong></div>
+      ${receipt.notes ? `<div style="grid-column:1/-1;"><span style="color:var(--color-text-muted);">Notas:</span> ${escapeHTML(receipt.notes)}</div>` : ''}
+    </div>
+  `;
+
+  const modal = document.getElementById('confirm-receipt-modal');
+  modal.classList.remove('provider-modal--hidden');
+  document.body.style.overflow = 'hidden';
+
+  setTimeout(() => document.getElementById('rm-confirm-supplier')?.focus(), 50);
+}
+
+/** Close the confirm receipt modal and restore scroll. */
+function closeConfirmModal() {
+  const modal = document.getElementById('confirm-receipt-modal');
+  if (!modal) return;
+  modal.classList.add('provider-modal--hidden');
+  document.body.style.overflow = '';
+  confirmingReceipt = null;
+}
+
+/**
+ * Handle confirm form submission — validate, call API, reload.
+ * @param {Event} e
+ */
+async function handleConfirmFormSubmit(e) {
+  if (e) e.preventDefault();
+
+  if (!confirmingReceipt) return;
+
+  // Validate
+  const errors = [];
+  const date        = document.getElementById('rm-confirm-date').value;
+  const supplierId  = document.getElementById('rm-confirm-supplier').value;
+  const cost        = parseFloat(document.getElementById('rm-confirm-cost').value);
+  const washed      = parseFloat(document.getElementById('rm-confirm-washed-weight').value) || 0;
+  const isRecycled  = confirmingReceipt.type === 'recycled';
+
+  document.querySelectorAll('#rm-confirm-form .form-error')
+    .forEach(el => (el.textContent = ''));
+
+  if (!date) {
+    document.getElementById('rm-confirm-error-date').textContent = 'La fecha es obligatoria.';
+    errors.push('fecha');
+  }
+  if (!supplierId) {
+    document.getElementById('rm-confirm-error-supplier').textContent = 'Selecciona un proveedor.';
+    errors.push('proveedor');
+  }
+  if (!cost || cost <= 0) {
+    document.getElementById('rm-confirm-error-cost').textContent = 'El costo debe ser mayor a 0.';
+    errors.push('costo');
+  }
+  if (isRecycled && washed > 0 && washed > confirmingReceipt.weightLbs) {
+    document.getElementById('rm-confirm-error-washed-weight').textContent =
+      'El peso lavado no puede superar el peso bruto.';
+    errors.push('peso lavado');
+  }
+
+  if (errors.length > 0) {
+    showFeedback(`Verifica los campos: ${errors.join(', ')}.`, 'error');
+    return;
+  }
+
+  const saveBtn = document.getElementById('rm-confirm-submit-btn');
+  setButtonLoading(saveBtn, true);
+
+  try {
+    await MaterialReceiptsAPI.confirm(
+      confirmingReceipt.id,
+      {
+        date,
+        month:           date.slice(0, 7),
+        supplierId,
+        totalCost:       cost,
+        washedWeightLbs: isRecycled ? washed : 0,
+        washingCost:     isRecycled
+          ? (parseFloat(document.getElementById('rm-confirm-washing-cost').value) || 0)
+          : 0,
+      },
+      confirmingReceipt
+    );
+
+    showFeedback('Entrada confirmada y compra registrada correctamente.', 'success');
+    closeConfirmModal();
+    await loadAll();
+
+  } catch (err) {
+    showFeedback(`Error al confirmar: ${err.message}`, 'error');
+  } finally {
+    setButtonLoading(saveBtn, false);
+  }
+}
+
 
 // ─── Inventory Modal ──────────────────────────────────────────────────────────
 

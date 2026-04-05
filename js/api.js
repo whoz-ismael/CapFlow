@@ -566,6 +566,126 @@ export const MonthlyInventoryAPI = {
 
 
 // =============================================================================
+// MATERIAL TYPE HELPERS
+// =============================================================================
+
+/**
+ * Map a raw DB type value to its Spanish display label.
+ * @param {string} type
+ * @returns {string}
+ */
+export function getMaterialTypeLabel(type) {
+  const labels = {
+    recycled:       'Reciclado',
+    pellet:         'Pellet Virgen',
+    pellet_regular: 'Pellet',
+    colorant:       'Colorante',
+  };
+  return labels[type] || type;
+}
+
+/**
+ * CSS badge modifier class for each material type.
+ * @param {string} type
+ * @returns {string}
+ */
+export function getMaterialTypeBadge(type) {
+  const badges = {
+    recycled:       'badge--teal',
+    pellet:         'badge--blue',
+    pellet_regular: 'badge--indigo',
+    colorant:       'badge--purple',
+  };
+  return badges[type] || 'badge--gray';
+}
+
+
+// =============================================================================
+// MATERIAL RECEIPTS
+//
+// DB: id, type, receipt_date, month, weight_lbs, notes, operator_name,
+//     status, raw_material_id, created_at, updated_at
+// JS: id, type, receiptDate, month, weightLbs, notes, operatorName,
+//     status, rawMaterialId, createdAt, updatedAt
+// =============================================================================
+
+function _materialReceiptFromDb(r) {
+  return {
+    id:             r.id,
+    type:           r.type,
+    receiptDate:    r.receipt_date,
+    date:           r.receipt_date,
+    month:          r.month,
+    weightLbs:      Number(r.weight_lbs),
+    notes:          r.notes || '',
+    operatorName:   r.operator_name || '',
+    status:         r.status,
+    rawMaterialId:  r.raw_material_id || null,
+    createdAt:      r.created_at,
+    updatedAt:      r.updated_at,
+  };
+}
+
+export const MaterialReceiptsAPI = {
+  async getAll() {
+    const { data, error } = await _sb.from('material_receipts').select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data || []).map(_materialReceiptFromDb);
+  },
+
+  async getPending() {
+    const { data, error } = await _sb.from('material_receipts').select('*')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data || []).map(_materialReceiptFromDb);
+  },
+
+  /**
+   * Confirm a pending receipt: creates the raw_materials record and marks the
+   * receipt as confirmed in a single coordinated operation.
+   * @param {string} receiptId
+   * @param {Object} confirmData - { date, supplierId, totalCost, washedWeightLbs, washingCost }
+   * @param {Object} receipt - the original receipt object (for type, weightLbs, month)
+   * @returns {Object} the newly created raw_materials record
+   */
+  async confirm(receiptId, confirmData, receipt) {
+    // 1. Create the raw_materials record
+    const rawMaterialRow = {
+      id:                _genId(),
+      type:              receipt.type,
+      purchase_date:     confirmData.date || receipt.receiptDate,
+      month:             confirmData.month || receipt.month,
+      weight_lbs:        Number(receipt.weightLbs) || 0,
+      cost:              Number(confirmData.totalCost) || 0,
+      washed_weight_lbs: Number(confirmData.washedWeightLbs) || 0,
+      washing_cost:      Number(confirmData.washingCost) || 0,
+      provider_id:       confirmData.supplierId || '',
+      notes:             receipt.notes || '',
+      extra:             {},
+      created_at:        new Date().toISOString(),
+    };
+
+    const { data: rmData, error: rmError } = await _sb
+      .from('raw_materials').insert(rawMaterialRow).select().single();
+    if (rmError) throw new Error(rmError.message);
+
+    // 2. Mark the receipt as confirmed
+    const { error: updateError } = await _sb
+      .from('material_receipts').update({
+        status:          'confirmed',
+        raw_material_id: rawMaterialRow.id,
+        updated_at:      new Date().toISOString(),
+      }).eq('id', receiptId);
+    if (updateError) throw new Error(updateError.message);
+
+    return _rawMaterialFromDb(rmData);
+  },
+};
+
+
+// =============================================================================
 // SALES
 //
 // DB: id, sale_date, month, client_id, status, notes, invoice_number,
