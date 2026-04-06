@@ -563,6 +563,7 @@ async function loadPackageWeights() {
           <thead>
             <tr style="border-bottom:2px solid var(--color-border);">
               <th style="text-align:left;padding:var(--space-sm) var(--space-md) var(--space-sm) 0;color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Fecha turno</th>
+              <th style="text-align:left;padding:var(--space-sm) var(--space-md);color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Hora</th>
               <th style="text-align:left;padding:var(--space-sm) var(--space-md);color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Operario</th>
               <th style="text-align:right;padding:var(--space-sm) var(--space-md);color:var(--color-text-muted);font-weight:600;white-space:nowrap;">Peso (lb)</th>
               <th style="text-align:left;padding:var(--space-sm) 0 var(--space-sm) var(--space-md);color:var(--color-text-muted);font-weight:600;">Notas</th>
@@ -572,6 +573,7 @@ async function loadPackageWeights() {
             ${records.map(r => `
               <tr style="border-bottom:1px solid var(--color-border);">
                 <td style="padding:var(--space-sm) var(--space-md) var(--space-sm) 0;white-space:nowrap;">${fmt(r.shift_date)}</td>
+                <td style="padding:var(--space-sm) var(--space-md);white-space:nowrap;color:var(--color-text-muted);">${new Date(r.created_at).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}</td>
                 <td style="padding:var(--space-sm) var(--space-md);white-space:nowrap;">${r.operator_name || '—'}</td>
                 <td style="padding:var(--space-sm) var(--space-md);text-align:right;font-weight:700;color:var(--color-primary);">${parseFloat(r.weight_lbs).toFixed(2)}</td>
                 <td style="padding:var(--space-sm) 0 var(--space-sm) var(--space-md);color:var(--color-text-muted);font-size:0.8rem;">${r.notes || ''}</td>
