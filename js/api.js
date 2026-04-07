@@ -732,6 +732,11 @@ function _saleFromDb(r) {
     status:        r.status || 'confirmed',
     notes:         r.notes,
     invoiceNumber: r.invoice_number,
+    operatorId:    r.operator_id   || null,
+    operatorName:  r.operator_name || '',
+    paymentMethod: r.payment_method || 'cash',
+    isInvestor:    r.is_investor   || false,
+    investorId:    r.investor_id   || null,
     totals,
     attachments:   Array.isArray(r.attachments) ? r.attachments : [],
     lines:         Array.isArray(r.lines) ? r.lines : [],
@@ -748,6 +753,14 @@ function _saleFromDb(r) {
 export const SalesAPI = {
   async getAll() {
     const { data, error } = await _sb.from('sales').select('*');
+    if (error) throw new Error(error.message);
+    return (data || []).map(_saleFromDb);
+  },
+
+  async getPendingReview() {
+    const { data, error } = await _sb.from('sales').select('*')
+      .eq('status', 'pending_review')
+      .order('created_at', { ascending: true });
     if (error) throw new Error(error.message);
     return (data || []).map(_saleFromDb);
   },
@@ -791,7 +804,7 @@ export const SalesAPI = {
     const u = { updated_at: new Date().toISOString() };
     if (d.saleDate      !== undefined) { u.sale_date = d.saleDate; u.month = (d.saleDate || '').slice(0, 7); }
     if (d.clientId       !== undefined) u.client_id      = String(d.clientId);
-    if (d.status         !== undefined) u.status         = d.status || 'confirmed';
+    if (d.status         !== undefined) u.status         = d.status ?? 'confirmed';
     if (d.notes          !== undefined) u.notes          = (d.notes || '').trim();
     if (d.invoiceNumber  !== undefined) u.invoice_number = (d.invoiceNumber || '').trim();
     if (d.attachments    !== undefined) u.attachments    = d.attachments;
@@ -1804,6 +1817,8 @@ export const ChangeHistoryAPI = {
         entity_name: entry.entity_name ?? '',
         action:      entry.action,
         changes:     entry.changes ?? null,
+        user_id:     entry.user_id   ?? null,
+        user_name:   entry.user_name ?? null,
       });
       if (error) console.warn('[CapFlow] Change log error:', error.message);
     } catch (err) {

@@ -82,6 +82,14 @@ const ROUTES = {
     },
   },
 
+  'pending-sales': {
+    title: 'Ventas Pendientes — CapFlow',
+    loader: async (container) => {
+      const { mountPendingSales } = await import('./modules/pendingSales.js');
+      await mountPendingSales(container);
+    },
+  },
+
   inventory: {
     title: 'Inventario — CapFlow',
     loader: async (container) => {
