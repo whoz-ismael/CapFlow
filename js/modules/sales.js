@@ -1182,52 +1182,92 @@ function handleEdit(saleId) {
 
 // ─── Delete ───────────────────────────────────────────────────────────────────
 
-async function handleDelete(saleId) {
+function _showDeleteConfirm(message, onConfirm) {
+  document.getElementById('delete-confirm-backdrop')?.remove();
+
+  const backdrop = document.createElement('div');
+  backdrop.id        = 'delete-confirm-backdrop';
+  backdrop.className = 'ar-modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="ar-modal" role="dialog" aria-modal="true" style="max-width:420px;">
+      <div class="ar-modal__header">
+        <h3 class="ar-modal__title" style="color:var(--color-danger);">⚠ Confirmar eliminación</h3>
+        <button class="ar-modal__close" id="del-confirm-close" type="button" aria-label="Cerrar">✕</button>
+      </div>
+      <p style="padding:var(--space-md) var(--space-lg);white-space:pre-wrap;color:var(--color-text);">${escapeHTML(message)}</p>
+      <div style="display:flex;justify-content:flex-end;gap:var(--space-sm);padding:var(--space-md) var(--space-lg);">
+        <button class="btn btn--ghost btn--sm" id="del-confirm-cancel">Cancelar</button>
+        <button class="btn btn--danger btn--sm" id="del-confirm-ok">✕ Eliminar</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+
+  const close = () => backdrop.remove();
+
+  backdrop.querySelector('#del-confirm-cancel').addEventListener('click', close);
+  backdrop.querySelector('#del-confirm-close').addEventListener('click', close);
+  backdrop.addEventListener('click', e => { if (e.target === backdrop) close(); });
+
+  const onKey = e => {
+    if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
+  };
+  document.addEventListener('keydown', onKey);
+
+  backdrop.querySelector('#del-confirm-ok').addEventListener('click', () => {
+    close();
+    document.removeEventListener('keydown', onKey);
+    onConfirm();
+  });
+}
+
+function handleDelete(saleId) {
   const sale = allSales.find(s => String(s.id) === String(saleId));
   if (!sale) return;
 
   const client    = allClientsIndex.get(String(sale.clientId));
   const clientLbl = client ? client.name : '[Cliente eliminado]';
   const amortNote = sale.investor?.amortizationTotal > 0
-    ? `\n\nSe revertirán ${formatCurrency(sale.investor.amortizationTotal)} de amortización de deuda.`
+    ? `\n\nSe revertirán ${formatCurrency(sale.investor?.amortizationTotal)} de amortización de deuda.`
     : '';
   const paymentsForSale = _paymentsMap.get(String(saleId)) || [];
   const payNote = paymentsForSale.length > 0
     ? `\n\nSe eliminarán ${paymentsForSale.length} pago(s) registrado(s).`
     : '';
 
-  if (!confirm(
-    `¿Eliminar la venta del ${formatDate(sale.saleDate)} para ${clientLbl}?` +
-    `\n\nEsto devolverá el stock de productos manufacturados al inventario.${amortNote}${payNote}`
-  )) return;
+  const confirmMsg =
+    `¿Eliminar la venta del ${formatDate(sale.saleDate)} para ${clientLbl}?\n\n` +
+    `Esto devolverá el stock de productos manufacturados al inventario.${amortNote}${payNote}`;
 
-  try {
-    // Return manufactured stock
-    for (const line of (sale.lines || [])) {
-      if (line.productType !== 'manufactured') continue;
-      const product = productMap.get(String(line.productId));
-      if (!product) continue;
-      const invItemId = await ensureProductInventoryItem(product);
-      await InventoryAPI.addStock(invItemId, line.quantity, saleId,
-        'Reverso por eliminación de venta');
+  _showDeleteConfirm(confirmMsg, async () => {
+    try {
+      // Return manufactured stock
+      for (const line of (sale.lines || [])) {
+        if (line.productType !== 'manufactured') continue;
+        const product = productMap.get(String(line.productId));
+        if (!product) continue;
+        const invItemId = await ensureProductInventoryItem(product);
+        await InventoryAPI.addStock(invItemId, line.quantity, saleId,
+          'Reverso por eliminación de venta');
+      }
+
+      // Reverse investor amortization
+      const hadAmort = (sale.investor?.amortizationTotal || 0) > 0;
+      const wasInv   = isInvestorSale(sale.clientId);
+      if (hadAmort || wasInv) {
+        await InvestorAPI.clearSaleAmortization(saleId, 'Reversión por eliminación de venta');
+      }
+
+      // Remove payments for this sale
+      await SalePaymentsAPI.removeBySaleId(saleId);
+
+      await SalesAPI.remove(saleId);
+      showFeedback('Venta eliminada y stock restaurado.', 'success');
+      await loadAll();
+    } catch (err) {
+      showFeedback(`Error al eliminar: ${err.message}`, 'error');
     }
-
-    // Reverse investor amortization
-    const hadAmort = (sale.investor?.amortizationTotal || 0) > 0;
-    const wasInv   = isInvestorSale(sale.clientId);
-    if (hadAmort || wasInv) {
-      await InvestorAPI.clearSaleAmortization(saleId, 'Reversión por eliminación de venta');
-    }
-
-    // Remove payments for this sale
-    await SalePaymentsAPI.removeBySaleId(saleId);
-
-    await SalesAPI.remove(saleId);
-    showFeedback('Venta eliminada y stock restaurado.', 'success');
-    await loadAll();
-  } catch (err) {
-    showFeedback(`Error al eliminar: ${err.message}`, 'error');
-  }
+  });
 }
 
 // ─── Reset Form ───────────────────────────────────────────────────────────────
