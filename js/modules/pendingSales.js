@@ -341,7 +341,7 @@ function _buildShellHTML() {
     <section class="module" id="pending-sales-module">
       <header class="module-header">
         <div class="module-header__title-row">
-          <span class="module-header__icon" aria-hidden="true">⏳</span>
+          <span class="module-header__icon" aria-hidden="true">⊡</span>
           <div>
             <h1 class="module-header__title">Ventas Pendientes</h1>
             <p class="module-header__subtitle">Despachos de CapDispatch que requieren confirmación</p>
