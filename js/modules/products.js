@@ -22,11 +22,15 @@
  */
 
 import { ProductsAPI, ChangeHistoryAPI } from '../api.js';
+import { AuthAPI } from '../auth.js';
 
 // ─── Module State ─────────────────────────────────────────────────────────────
 
 /** Holds the product currently being edited, or null for "create" mode. */
 let editingProduct = null;
+
+/** Usuario admin actual para registrar en el historial. */
+let _currentAdmin = { id: null, name: 'Sistema' };
 
 /**
  * Current value of the status filter dropdown.
@@ -42,9 +46,16 @@ let activeFilter = 'all';
  * Called by the router in app.js.
  * @param {HTMLElement} container
  */
-export function mountProducts(container) {
+export async function mountProducts(container) {
   console.log('[CapFlow] Products module loaded ✔', typeof mountProducts);
   container.innerHTML = buildModuleHTML();
+
+  const session = await AuthAPI.getSession();
+  _currentAdmin = {
+    id:   session?.user?.id    ?? null,
+    name: session?.user?.email ?? 'Sistema',
+  };
+
   attachFormListeners();
   loadProducts();
 }
@@ -366,6 +377,7 @@ async function handleFormSubmit(e) {
       ChangeHistoryAPI.log({
         entity_type: 'product', entity_id: editingProduct.id,
         entity_name: payload.name, action: 'editar', changes,
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
       });
     } else {
       // ── Create mode → POST
@@ -375,6 +387,7 @@ async function handleFormSubmit(e) {
       ChangeHistoryAPI.log({
         entity_type: 'product', entity_id: result?.id ?? '',
         entity_name: payload.name, action: 'crear', changes: null,
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
       });
     }
 
@@ -438,6 +451,7 @@ async function handleToggleStatus(productId, currentlyActive) {
       entity_name: product?.name ?? '',
       action: currentlyActive ? 'desactivar' : 'activar',
       changes: { active: { before: currentlyActive, after: !currentlyActive } },
+      user_id: _currentAdmin.id, user_name: _currentAdmin.name,
     });
 
     await loadProducts();
@@ -466,6 +480,7 @@ async function handleDelete(productId, productName) {
     ChangeHistoryAPI.log({
       entity_type: 'product', entity_id: productId,
       entity_name: productName, action: 'eliminar', changes: null,
+      user_id: _currentAdmin.id, user_name: _currentAdmin.name,
     });
 
     // If we were editing this product, reset the form

@@ -16,6 +16,7 @@
  */
 
 import { MachinesAPI, ChangeHistoryAPI } from '../api.js';
+import { AuthAPI } from '../auth.js';
 
 // ─── Module State ─────────────────────────────────────────────────────────────
 
@@ -32,6 +33,9 @@ let allMachines = [];
  */
 let activeFilter = 'all';
 
+/** Usuario admin actual para registrar en el historial. */
+let _currentAdmin = { id: null, name: 'Sistema' };
+
 // ─── Entry Point ──────────────────────────────────────────────────────────────
 
 /**
@@ -39,8 +43,15 @@ let activeFilter = 'all';
  * Called by the router in app.js.
  * @param {HTMLElement} container
  */
-export function mountMachines(container) {
+export async function mountMachines(container) {
   container.innerHTML = buildModuleHTML();
+
+  const session = await AuthAPI.getSession();
+  _currentAdmin = {
+    id:   session?.user?.id    ?? null,
+    name: session?.user?.email ?? 'Sistema',
+  };
+
   attachFormListeners();
   loadMachines();
 }
@@ -361,6 +372,7 @@ async function handleFormSubmit(e) {
       ChangeHistoryAPI.log({
         entity_type: 'machine', entity_id: editingMachine.id,
         entity_name: payload.name, action: 'editar', changes,
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
       });
     } else {
       // ── Create mode → create
@@ -370,6 +382,7 @@ async function handleFormSubmit(e) {
       ChangeHistoryAPI.log({
         entity_type: 'machine', entity_id: result?.id ?? '',
         entity_name: payload.name, action: 'crear', changes: null,
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
       });
     }
 
@@ -444,6 +457,7 @@ async function handleToggleStatus(machineId, currentlyActive) {
       entity_name: machine?.name ?? '',
       action: currentlyActive ? 'desactivar' : 'activar',
       changes: { isActive: { before: currentlyActive, after: !currentlyActive } },
+      user_id: _currentAdmin.id, user_name: _currentAdmin.name,
     });
 
     // If this machine was open in the edit form, refresh its displayed status

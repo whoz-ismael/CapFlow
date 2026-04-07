@@ -1817,6 +1817,8 @@ export const ChangeHistoryAPI = {
         entity_name: entry.entity_name ?? '',
         action:      entry.action,
         changes:     entry.changes ?? null,
+        user_id:     entry.user_id   ?? null,
+        user_name:   entry.user_name ?? null,
       });
       if (error) console.warn('[CapFlow] Change log error:', error.message);
     } catch (err) {

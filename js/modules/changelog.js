@@ -59,6 +59,7 @@ function buildModuleHTML() {
                 <option value="">Todos</option>
                 <option value="product">Productos</option>
                 <option value="machine">Máquinas</option>
+                <option value="sale">Ventas</option>
               </select>
             </div>
           </div>
@@ -72,6 +73,8 @@ function buildModuleHTML() {
                 <option value="activar">Activar</option>
                 <option value="desactivar">Desactivar</option>
                 <option value="eliminar">Eliminar</option>
+                <option value="confirmar">Confirmar venta</option>
+                <option value="rechazar">Rechazar venta</option>
               </select>
             </div>
           </div>
@@ -120,6 +123,25 @@ function buildModuleHTML() {
         </div>
       </div>
     </section>
+
+    <style>
+      .changelog-item__user {
+        display:       inline-flex;
+        align-items:   center;
+        gap:           4px;
+        font-size:     0.75rem;
+        color:         var(--color-text-muted);
+        background:    var(--color-bg-base);
+        border:        1px solid var(--color-border);
+        border-radius: var(--radius-sm, 4px);
+        padding:       1px 6px;
+        white-space:   nowrap;
+      }
+      .changelog-item__icon--confirm { background: var(--color-success-bg, #e6f7ee); color: var(--color-success, #27ae60); }
+      .changelog-item__icon--reject  { background: var(--color-danger-bg,  #fdecea); color: var(--color-danger,  #e74c3c); }
+      .badge--green { background: #27ae6020; color: #27ae60; border-color: #27ae60; }
+      .badge--red   { background: #e74c3c20; color: #e74c3c; border-color: #e74c3c; }
+    </style>
   `;
 }
 
@@ -171,10 +193,15 @@ function buildTimelineItem(entry) {
   const { label, cls, icon } = ACTION_META[entry.action] ?? { label: entry.action, cls: 'edit', icon: '·' };
   const entityLabel = ENTITY_LABELS[entry.entity_type] ?? entry.entity_type;
   const badgeColor  = { create: 'badge--green', edit: 'badge--blue', activate: 'badge--teal',
-                        deactivate: 'badge--gray', delete: 'badge--red' }[cls] ?? 'badge--blue';
+                        deactivate: 'badge--gray', delete: 'badge--red',
+                        confirm: 'badge--green', reject: 'badge--red' }[cls] ?? 'badge--blue';
   const dateStr  = formatDate(entry.created_at);
   const timeStr  = formatTime(entry.created_at);
   const changes  = buildChangesHTML(entry.changes);
+  const userName = entry.user_name || entry.operator_name || null;
+  const userChip = userName
+    ? `<span class="changelog-item__user" title="Registrado por ${escapeHTML(userName)}">👤 ${escapeHTML(userName)}</span>`
+    : '';
 
   return `
     <li class="changelog-item">
@@ -187,6 +214,7 @@ function buildTimelineItem(entry) {
           <span class="badge ${badgeColor}">${label}</span>
           <span class="badge badge--outline">${entityLabel}</span>
           <strong class="changelog-item__name">${escapeHTML(entry.entity_name ?? '—')}</strong>
+          ${userChip}
           <span class="changelog-item__time">${escapeHTML(dateStr)} · ${escapeHTML(timeStr)}</span>
         </div>
         ${changes}
@@ -264,9 +292,11 @@ const ACTION_META = {
   activar:    { label: 'Activado',    cls: 'activate',   icon: '✔' },
   desactivar: { label: 'Desactivado', cls: 'deactivate', icon: '✕' },
   eliminar:   { label: 'Eliminado',   cls: 'delete',     icon: '✕' },
+  confirmar:  { label: 'Confirmado',  cls: 'confirm',    icon: '✔' },
+  rechazar:   { label: 'Rechazado',   cls: 'reject',     icon: '✕' },
 };
 
-const ENTITY_LABELS = { product: 'Producto', machine: 'Máquina' };
+const ENTITY_LABELS = { product: 'Producto', machine: 'Máquina', sale: 'Venta' };
 
 const FIELD_LABELS = {
   name: 'Nombre', type: 'Tipo', active: 'Estado', isActive: 'Estado',
