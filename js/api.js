@@ -757,6 +757,14 @@ export const SalesAPI = {
     return (data || []).map(_saleFromDb);
   },
 
+  async getPendingReview() {
+    const { data, error } = await _sb.from('sales').select('*')
+      .eq('status', 'pending_review')
+      .order('created_at', { ascending: true });
+    if (error) throw new Error(error.message);
+    return (data || []).map(_saleFromDb);
+  },
+
   async getById(id) {
     const { data, error } = await _sb.from('sales').select('*')
       .eq('id', String(id)).maybeSingle();
@@ -796,7 +804,7 @@ export const SalesAPI = {
     const u = { updated_at: new Date().toISOString() };
     if (d.saleDate      !== undefined) { u.sale_date = d.saleDate; u.month = (d.saleDate || '').slice(0, 7); }
     if (d.clientId       !== undefined) u.client_id      = String(d.clientId);
-    if (d.status         !== undefined) u.status         = d.status || 'confirmed';
+    if (d.status         !== undefined) u.status         = d.status ?? 'confirmed';
     if (d.notes          !== undefined) u.notes          = (d.notes || '').trim();
     if (d.invoiceNumber  !== undefined) u.invoice_number = (d.invoiceNumber || '').trim();
     if (d.attachments    !== undefined) u.attachments    = d.attachments;
