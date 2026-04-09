@@ -188,6 +188,9 @@ function buildShellHTML() {
         <button class="rpt-tab-btn" data-report="expenses">
           Gastos
         </button>
+        <button class="rpt-tab-btn" data-report="production">
+          Producción
+        </button>
       </div>
 
       <!-- Dynamic body -->
@@ -201,8 +204,9 @@ function buildShellHTML() {
 function renderActiveReport(container) {
   if (_activeReport === 'monthly')   renderMonthlyReport(container);
   else if (_activeReport === 'sales') renderSalesReport(container);
-  else if (_activeReport === 'ledger') renderLedgerReport(container);
-  else                                renderExpensesReport(container);
+  else if (_activeReport === 'ledger')      renderLedgerReport(container);
+  else if (_activeReport === 'production') renderProductionReport(container);
+  else                                     renderExpensesReport(container);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1168,6 +1172,277 @@ function buildExpensesOutput(from, to, categoryFilter, includePayroll) {
             <tr>
               <th colspan="4">Total gastos operativos (${formatNumber(rows.length)} registro${rows.length !== 1 ? 's' : ''})</th>
               <th class="text-right">${formatCurrency(expenseTotal)}</th>
+            </tr>
+          </tfoot>
+        </table>`}
+      </div>
+
+      ${buildReportFooter()}
+    </div>
+  `;
+
+  if (printBtn) printBtn.style.display = '';
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// REPORT 5 — PRODUCCIÓN
+// ══════════════════════════════════════════════════════════════════════════════
+
+function renderProductionReport(container) {
+  const today     = todayYMD();
+  const monthFrom = today.slice(0, 7) + '-01';
+
+  const operatorOptions = [..._operatorMap.values()]
+    .sort((a, b) => a.name.localeCompare(b.name, 'es'))
+    .map(o => `<option value="${escapeHTML(String(o.id))}">${escapeHTML(o.name)}</option>`)
+    .join('');
+
+  const machineOptions = [..._machineMap.values()]
+    .sort((a, b) => a.name.localeCompare(b.name, 'es'))
+    .map(m => `<option value="${escapeHTML(String(m.id))}">${escapeHTML(m.name)}</option>`)
+    .join('');
+
+  document.getElementById('rpt-body').innerHTML = `
+    <div class="rpt-controls card">
+      <div class="rpt-controls__row">
+        <div class="form-group" style="flex:0 0 auto;">
+          <label class="form-label" for="rpt-prod-from">Desde</label>
+          <input class="form-input" type="date" id="rpt-prod-from"
+                 value="${escapeHTML(monthFrom)}">
+        </div>
+        <div class="form-group" style="flex:0 0 auto;">
+          <label class="form-label" for="rpt-prod-to">Hasta</label>
+          <input class="form-input" type="date" id="rpt-prod-to"
+                 value="${escapeHTML(today)}">
+        </div>
+        <div class="form-group" style="flex:0 0 auto;">
+          <label class="form-label" for="rpt-prod-operator">Operario</label>
+          <select class="form-input form-select" id="rpt-prod-operator">
+            <option value="">Todos los operarios</option>
+            ${operatorOptions}
+          </select>
+        </div>
+        <div class="form-group" style="flex:0 0 auto;">
+          <label class="form-label" for="rpt-prod-machine">Máquina</label>
+          <select class="form-input form-select" id="rpt-prod-machine">
+            <option value="">Todas las máquinas</option>
+            ${machineOptions}
+          </select>
+        </div>
+        <button class="btn btn--primary" id="rpt-prod-generate">
+          Generar reporte
+        </button>
+        <button class="btn btn--ghost" id="rpt-prod-print" style="display:none;">
+          🖨 Imprimir / Guardar PDF
+        </button>
+      </div>
+    </div>
+    <div id="rpt-prod-output"></div>
+  `;
+
+  document.getElementById('rpt-prod-generate').addEventListener('click', () => {
+    const from   = document.getElementById('rpt-prod-from').value;
+    const to     = document.getElementById('rpt-prod-to').value;
+    const opId   = document.getElementById('rpt-prod-operator').value;
+    const machId = document.getElementById('rpt-prod-machine').value;
+    if (!from || !to) return;
+    if (from > to) {
+      alert('La fecha de inicio no puede ser posterior a la fecha final.');
+      return;
+    }
+    buildProductionReportOutput(from, to, opId, machId);
+  });
+
+  document.getElementById('rpt-prod-print').addEventListener('click', () => {
+    window.print();
+  });
+
+  // Auto-generate on load
+  buildProductionReportOutput(monthFrom, today, '', '');
+}
+
+function buildProductionReportOutput(from, to, operatorId, machineId) {
+  const printBtn = document.getElementById('rpt-prod-print');
+  const output   = document.getElementById('rpt-prod-output');
+  if (!output) return;
+
+  // ── Filter ────────────────────────────────────────────────────────────────
+  let records = _allProduction.filter(r => {
+    const d = r.productionDate || '';
+    return d >= from && d <= to;
+  });
+  if (operatorId) records = records.filter(r => String(r.operatorId) === operatorId);
+  if (machineId)  records = records.filter(r => String(r.machineId)  === machineId);
+  records = [...records].sort((a, b) => (a.productionDate || '').localeCompare(b.productionDate || ''));
+
+  // ── KPIs ──────────────────────────────────────────────────────────────────
+  const totalShifts    = records.length;
+  const totalUnits     = records.reduce((s, r) => s + (r.quantity || 0), 0);
+  const totalLaborCost = records.reduce(
+    (s, r) => s + (r.quantity || 0) * (r.operatorRateSnapshot || 0), 0);
+  const avgPerShift    = totalShifts > 0 ? totalUnits / totalShifts : 0;
+
+  // ── By operator ───────────────────────────────────────────────────────────
+  const byOperator = new Map();
+  for (const r of records) {
+    const key  = String(r.operatorId || '');
+    const name = _operatorMap.get(key)?.name || '[Operario eliminado]';
+    const cur  = byOperator.get(key) || { name, shifts: 0, units: 0, laborCost: 0 };
+    cur.shifts    += 1;
+    cur.units     += (r.quantity || 0);
+    cur.laborCost += (r.quantity || 0) * (r.operatorRateSnapshot || 0);
+    byOperator.set(key, cur);
+  }
+  const operatorRows = [...byOperator.values()].sort((a, b) => b.units - a.units);
+
+  // ── By machine ────────────────────────────────────────────────────────────
+  const byMachine = new Map();
+  for (const r of records) {
+    const key  = String(r.machineId || '');
+    const name = _machineMap.get(key)?.name || '[Máquina eliminada]';
+    const cur  = byMachine.get(key) || { name, shifts: 0, units: 0 };
+    cur.shifts += 1;
+    cur.units  += (r.quantity || 0);
+    byMachine.set(key, cur);
+  }
+  const machineRows = [...byMachine.values()].sort((a, b) => b.units - a.units);
+
+  // ── Labels ────────────────────────────────────────────────────────────────
+  const filterParts = [];
+  if (operatorId) filterParts.push(_operatorMap.get(operatorId)?.name || 'Operario');
+  if (machineId)  filterParts.push(_machineMap.get(machineId)?.name   || 'Máquina');
+  const periodLabel = `${escapeHTML(formatDateLabel(from))} — ${escapeHTML(formatDateLabel(to))}`;
+  const subtitle    = filterParts.length
+    ? `${filterParts.map(escapeHTML).join(' · ')} · ${periodLabel}`
+    : periodLabel;
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  output.innerHTML = `
+    <div class="report-printable" id="rpt-prod-printable">
+
+      ${buildReportHeader('Reporte de Producción', subtitle)}
+
+      <!-- KPIs -->
+      <div class="rpt-section">
+        <h2 class="rpt-section__title">Resumen del período</h2>
+        <div class="rpt-kpi-grid">
+          ${rptKPI('Turnos registrados',      formatNumber(totalShifts),    '')}
+          ${rptKPI('Unidades producidas',     formatNumber(totalUnits),     '')}
+          ${rptKPI('Costo laboral total',     formatCurrency(totalLaborCost), '')}
+          ${rptKPI('Promedio tapas / turno',  totalShifts > 0 ? formatNumber(Math.round(avgPerShift)) : '—', '')}
+        </div>
+      </div>
+
+      <!-- By operator -->
+      ${operatorRows.length > 0 ? `
+      <div class="rpt-section">
+        <h2 class="rpt-section__title">Por operario</h2>
+        <table class="rpt-table rpt-table--sm">
+          <thead>
+            <tr>
+              <th>Operario</th>
+              <th class="text-right">Turnos</th>
+              <th class="text-right">Unidades</th>
+              <th class="text-right">Costo laboral</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${operatorRows.map(o => `
+              <tr>
+                <td>${escapeHTML(o.name)}</td>
+                <td class="text-right">${formatNumber(o.shifts)}</td>
+                <td class="text-right">${formatNumber(o.units)}</td>
+                <td class="text-right">${formatCurrency(o.laborCost)}</td>
+              </tr>`).join('')}
+          </tbody>
+          <tfoot>
+            <tr>
+              <th>Total</th>
+              <th class="text-right">${formatNumber(totalShifts)}</th>
+              <th class="text-right">${formatNumber(totalUnits)}</th>
+              <th class="text-right">${formatCurrency(totalLaborCost)}</th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>` : ''}
+
+      <!-- By machine -->
+      ${machineRows.length > 0 ? `
+      <div class="rpt-section">
+        <h2 class="rpt-section__title">Por máquina</h2>
+        <table class="rpt-table rpt-table--sm">
+          <thead>
+            <tr>
+              <th>Máquina</th>
+              <th class="text-right">Turnos</th>
+              <th class="text-right">Unidades</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${machineRows.map(m => `
+              <tr>
+                <td>${escapeHTML(m.name)}</td>
+                <td class="text-right">${formatNumber(m.shifts)}</td>
+                <td class="text-right">${formatNumber(m.units)}</td>
+              </tr>`).join('')}
+          </tbody>
+          <tfoot>
+            <tr>
+              <th>Total</th>
+              <th class="text-right">${formatNumber(totalShifts)}</th>
+              <th class="text-right">${formatNumber(totalUnits)}</th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>` : ''}
+
+      <!-- Detail -->
+      <div class="rpt-section">
+        <h2 class="rpt-section__title">Detalle de registros</h2>
+        ${records.length === 0 ? `
+          <p style="color:var(--color-text-muted);font-size:0.9rem;padding:var(--space-md) 0;">
+            No hay registros de producción en este período con los filtros seleccionados.
+          </p>
+        ` : `
+        <table class="rpt-table rpt-table--sm">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Máquina</th>
+              <th>Producto</th>
+              <th class="text-right">Cantidad</th>
+              <th>Turno</th>
+              <th>Operario</th>
+              <th class="text-right">Costo laboral</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${records.map(r => {
+              const opName   = _operatorMap.get(String(r.operatorId || ''))?.name || '—';
+              const machName = _machineMap.get(String(r.machineId   || ''))?.name || '—';
+              const prodName = _productMap.get(String(r.productId   || ''))?.name || '—';
+              const labor    = (r.quantity || 0) * (r.operatorRateSnapshot || 0);
+              const shiftLabel = r.shift === 'morning' ? 'Mañana'
+                               : r.shift === 'afternoon' ? 'Tarde'
+                               : r.shift === 'night' ? 'Noche'
+                               : escapeHTML(r.shift || '—');
+              return `<tr>
+                <td style="white-space:nowrap;">${escapeHTML(formatDateLabel(r.productionDate || ''))}</td>
+                <td>${escapeHTML(machName)}</td>
+                <td>${escapeHTML(prodName)}</td>
+                <td class="text-right" style="font-family:var(--font-mono);">${formatNumber(r.quantity || 0)}</td>
+                <td>${shiftLabel}</td>
+                <td>${escapeHTML(opName)}</td>
+                <td class="text-right">${formatCurrency(labor)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+          <tfoot>
+            <tr>
+              <th colspan="3">Total (${formatNumber(records.length)} turno${records.length !== 1 ? 's' : ''})</th>
+              <th class="text-right" style="font-family:var(--font-mono);">${formatNumber(totalUnits)}</th>
+              <th colspan="2"></th>
+              <th class="text-right">${formatCurrency(totalLaborCost)}</th>
             </tr>
           </tfoot>
         </table>`}
