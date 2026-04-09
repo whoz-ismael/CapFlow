@@ -306,7 +306,11 @@ function fillSummary() {
     formatCurrency(investorRecord.totalDebt);
 
   const history        = investorRecord.history || [];
-  const totalInvested  = history.filter(e => e.type === 'investment').reduce((s, e) => s + e.amount, 0);
+  const totalInvested  = history.reduce((s, e) => {
+    if (e.type === 'investment')         return s + e.amount;
+    if (e.type === 'investment_reversal') return s - e.amount;
+    return s;
+  }, 0);
   const totalAmortized = history.reduce((s, e) => {
     if (e.type === 'amortization') return s + e.amount;
     if (e.type === 'reversal')     return s - e.amount;
@@ -338,21 +342,23 @@ function fillHistory() {
 }
 
 function buildHistoryRow(entry) {
-  const isInvestment = entry.type === 'investment';
-  const typeLabel    = isInvestment ? 'Inversión'    : 'Amortización';
-  const typeClass    = isInvestment ? 'badge--blue'  : 'badge--green';
-  const amtClass     = isInvestment ? 'inv-amt-inv'  : 'inv-amt-amort';
-  const sign         = isInvestment ? '+'            : '−';
-  const refCell      = entry.referenceId
+  const TYPE_META = {
+    investment:          { label: 'Inversión',           cls: 'badge--blue',   amtCls: 'inv-amt-inv',   sign: '+' },
+    investment_reversal: { label: 'Reversión inversión', cls: 'badge--red',    amtCls: 'inv-amt-amort', sign: '−' },
+    amortization:        { label: 'Amortización',        cls: 'badge--green',  amtCls: 'inv-amt-amort', sign: '−' },
+    reversal:            { label: 'Reversión amort.',    cls: 'badge--orange', amtCls: 'inv-amt-inv',   sign: '+' },
+  };
+  const meta     = TYPE_META[entry.type] || TYPE_META.investment;
+  const refCell  = entry.referenceId
     ? `<code style="font-size:0.75rem;">${escapeHTML(String(entry.referenceId))}</code>`
     : '—';
 
   return `
     <tr class="table-row">
       <td>${formatDate(entry.date)}</td>
-      <td><span class="badge ${typeClass}">${typeLabel}</span></td>
+      <td><span class="badge ${meta.cls}">${meta.label}</span></td>
       <td class="text-right">
-        <span class="${amtClass}">${sign} ${formatCurrency(entry.amount)}</span>
+        <span class="${meta.amtCls}">${meta.sign} ${formatCurrency(entry.amount)}</span>
       </td>
       <td>${refCell}</td>
       <td>${escapeHTML(entry.note || '—')}</td>
