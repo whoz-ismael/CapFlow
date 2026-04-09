@@ -21,6 +21,7 @@ import { MonthlyInventoryAPI }              from '../api.js';
 import { ProductionAPI }                    from '../api.js';
 import { MaterialReceiptsAPI }              from '../api.js';
 import { getMaterialTypeLabel, getMaterialTypeBadge } from '../api.js';
+import { InvestorAPI }                      from '../api.js';
 
 // ─── Module State ─────────────────────────────────────────────────────────────
 
@@ -50,6 +51,9 @@ let confirmingReceipt = null;
 
 /** YYYY-MM of the currently selected month summary. */
 let selectedMonth = '';
+
+/** Cached investor record — used to show/hide financing section. */
+let investorRecord = null;
 
 // ─── Entry Point ──────────────────────────────────────────────────────────────
 
@@ -81,16 +85,20 @@ async function loadAll() {
   showTableLoading(true);
 
   try {
-    [allRecords, allProviders, allInventoryRecords, allProductionRecords, allPendingReceipts] = await Promise.all([
+    [allRecords, allProviders, allInventoryRecords, allProductionRecords, allPendingReceipts, investorRecord] = await Promise.all([
       RawMaterialsAPI.getAll(),
       ProvidersAPI.getAll(),
       MonthlyInventoryAPI.getAll(),
       ProductionAPI.getAll(),
       MaterialReceiptsAPI.getPending(),
+      InvestorAPI.get().catch(() => null),
     ]);
 
     // Rebuild lookup map: all providers (active + inactive) for name resolution
     providerMap = new Map(allProviders.map(p => [String(p.id), p]));
+
+    // Show/hide investor financing section based on configuration
+    renderInvestorSection();
 
     // Repopulate supplier dropdown with active providers only
     populateProviderSelect();
@@ -385,6 +393,32 @@ function buildModuleHTML() {
             </div>
           </div>
 
+          <!-- Investor Financing (shown only when an investor record exists) -->
+          <div class="rm-investor-section" id="rm-investor-section" style="display:none;">
+            <label class="rm-investor-toggle">
+              <input type="checkbox" id="rm-investor-check">
+              <span class="rm-investor-toggle-label">
+                <strong>Financiado por el inversionista</strong>
+                <span class="form-hint" style="margin:0;">El monto se sumará a la deuda del inversionista</span>
+              </span>
+            </label>
+            <div id="rm-investor-fields" style="display:none;" class="form-grid rm-investor-fields">
+              <div class="form-group">
+                <label class="form-label" for="rm-investor-amount">
+                  Monto financiado (RD$) <span class="required">*</span>
+                </label>
+                <input class="form-input" type="number" id="rm-investor-amount"
+                       min="0.01" step="0.01" placeholder="0.00">
+                <span class="form-error" id="rm-investor-error"></span>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="rm-investor-note">Nota (opcional)</label>
+                <input class="form-input" type="text" id="rm-investor-note" maxlength="120"
+                       placeholder="Ej: Préstamo para compra de material reciclado">
+              </div>
+            </div>
+          </div>
+
           <!-- Form Actions -->
           <div class="form-actions">
             <button type="submit" class="btn btn--primary" id="rm-submit-btn">
@@ -491,12 +525,17 @@ function buildTableRow(r) {
     supplierDisplay = escapeHTML(provider.name);
   }
 
+  const invBadge = r.investorFinancing
+    ? `<span class="badge badge--orange" style="font-size:0.7rem;padding:2px 6px;"
+         title="Financiado por el inversionista: ${formatCurrency(r.investorFinancing.amount)}">◈ INV</span>`
+    : '';
+
   return `
     <tr class="table-row">
       <td class="td-date" style="font-family:var(--font-mono);font-size:0.82rem;white-space:nowrap;">
         ${escapeHTML(formatDateDisplay(r.date))}
       </td>
-      <td><span class="badge ${typeBadge}">${typeLabel}</span></td>
+      <td><span class="badge ${typeBadge}">${typeLabel}</span>${invBadge ? ' ' + invBadge : ''}</td>
       <td>${supplierDisplay}</td>
       <td class="text-right" style="font-family:var(--font-mono);">
         ${formatNumber(r.weightLbs)}
@@ -519,6 +558,15 @@ function buildTableRow(r) {
       </td>
     </tr>
   `;
+}
+
+// ─── Investor Section ─────────────────────────────────────────────────────────
+
+/** Show or hide the investor financing section based on whether an investor is configured. */
+function renderInvestorSection() {
+  const section = document.getElementById('rm-investor-section');
+  if (!section) return;
+  section.style.display = investorRecord ? '' : 'none';
 }
 
 // ─── Pending Receipts ─────────────────────────────────────────────────────────
@@ -1033,6 +1081,19 @@ function attachFormListeners() {
     selectedMonth = monthSel.value || currentMonthString();
     renderMonthlySummary();
   });
+
+  // Investor financing checkbox — show/hide amount fields
+  document.getElementById('rm-investor-check')
+    ?.addEventListener('change', e => {
+      const fields = document.getElementById('rm-investor-fields');
+      if (fields) fields.style.display = e.target.checked ? '' : 'none';
+      if (e.target.checked) {
+        // Pre-fill with current total cost
+        const cost = parseFloat(document.getElementById('rm-field-cost').value) || 0;
+        const amtInput = document.getElementById('rm-investor-amount');
+        if (amtInput && !amtInput.value) amtInput.value = cost > 0 ? cost : '';
+      }
+    });
 }
 
 /** Show or hide the washing fields based on the current material type. */
@@ -1074,7 +1135,22 @@ async function handleFormSubmit(e) {
       resetFormToCreateMode();
       return;
     } else {
-      await RawMaterialsAPI.create(payload);
+      // Validate investor financing amount before saving
+      if (payload.investorFinancing && payload.investorFinancing.amount <= 0) {
+        document.getElementById('rm-investor-error').textContent = 'El monto financiado debe ser mayor a 0.';
+        setButtonLoading(submitBtn, false);
+        return;
+      }
+
+      const newRecord = await RawMaterialsAPI.create(payload);
+
+      // Record investor financing in the investor's history
+      if (payload.investorFinancing && investorRecord) {
+        const fin     = payload.investorFinancing;
+        const noteInv = fin.note || `Materia prima: ${getMaterialTypeLabel(payload.materialType)} — ${payload.date}`;
+        await InvestorAPI.addInvestment(fin.amount, noteInv, newRecord.id);
+      }
+
       showFeedback('Compra registrada correctamente.', 'success');
     }
 
@@ -1158,6 +1234,14 @@ function resetFormToCreateMode() {
   document.getElementById('rm-submit-btn').innerHTML =
     '<span class="btn__icon">＋</span> Guardar Compra';
   document.getElementById('rm-cancel-btn').style.display = 'none';
+
+  // Reset investor financing section
+  const invCheck  = document.getElementById('rm-investor-check');
+  const invFields = document.getElementById('rm-investor-fields');
+  if (invCheck)  invCheck.checked        = false;
+  if (invFields) invFields.style.display = 'none';
+  const invError = document.getElementById('rm-investor-error');
+  if (invError)  invError.textContent    = '';
 
   clearFormErrors();
 }
@@ -2122,6 +2206,14 @@ function collectFormData() {
   const type       = document.getElementById('rm-field-type').value;
   const isRecycled = type === 'recycled';
 
+  const investorChecked = document.getElementById('rm-investor-check')?.checked && investorRecord;
+  const investorAmount  = investorChecked
+    ? (parseFloat(document.getElementById('rm-investor-amount').value) || 0)
+    : 0;
+  const investorNote    = investorChecked
+    ? (document.getElementById('rm-investor-note').value.trim())
+    : '';
+
   return {
     date:         document.getElementById('rm-field-date').value,
     materialType: type,
@@ -2135,6 +2227,8 @@ function collectFormData() {
     washingCost: isRecycled
       ? (parseFloat(document.getElementById('rm-field-washing-cost').value) || 0)
       : 0,
+    // Investor financing (stored in extra JSONB column)
+    investorFinancing: investorChecked ? { amount: investorAmount, note: investorNote } : null,
   };
 }
 
@@ -2538,6 +2632,29 @@ function buildRawMaterialStyles() {
       .rm-balance-empty__sub {
         font-size: 0.78rem;
         opacity:   0.7;
+      }
+
+      /* ── Investor financing section ── */
+      .rm-investor-section {
+        border-top: 1px solid var(--color-border);
+        margin-top: var(--space-lg); padding-top: var(--space-lg);
+      }
+      .rm-investor-toggle {
+        display: flex; align-items: flex-start; gap: var(--space-sm);
+        cursor: pointer;
+      }
+      .rm-investor-toggle input[type="checkbox"] {
+        margin-top: 2px; flex-shrink: 0; accent-color: var(--color-warning, #f59e0b);
+      }
+      .rm-investor-toggle-label {
+        display: flex; flex-direction: column; gap: 2px;
+      }
+      .rm-investor-fields {
+        margin-top: var(--space-md);
+        padding: var(--space-md);
+        background: color-mix(in srgb, var(--color-warning, #f59e0b) 8%, transparent);
+        border: 1px solid color-mix(in srgb, var(--color-warning, #f59e0b) 30%, transparent);
+        border-radius: var(--radius-md);
       }
     </style>
   `;
