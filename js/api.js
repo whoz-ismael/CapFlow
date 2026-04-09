@@ -1097,14 +1097,14 @@ export const InvestorAPI = {
     return record;
   },
 
-  async addInvestment(amount, note = '') {
+  async addInvestment(amount, note = '', referenceId = null) {
     const record = await _investorRead();
     if (!record) throw new Error('No existe un registro de inversionista.');
     const amt = Number(amount);
     if (!amt || amt <= 0) throw new Error('El monto de inversión debe ser mayor que cero.');
     record.history.push({
       id: _genId('inv'), type: 'investment', amount: amt,
-      date: Date.now(), referenceId: null, note: (note || '').trim(),
+      date: Date.now(), referenceId: referenceId ?? null, note: (note || '').trim(),
     });
     record.totalDebt += amt;
     await _investorWrite(record);
@@ -1169,6 +1169,46 @@ export const InvestorAPI = {
     return this.setSaleAmortization(
       referenceId, 0, note || `Reversión por eliminación: ${referenceId}`
     );
+  },
+
+  // ── Expense / Raw-material financing ────────────────────────────────────────
+
+  /** Net investment recorded for a given referenceId (expenses / raw materials). */
+  _netInvestmentForRef(record, referenceId) {
+    if (!record) return 0;
+    return (record.history || []).reduce((net, e) => {
+      if (String(e.referenceId) !== String(referenceId)) return net;
+      if (e.type === 'investment')         return net + e.amount;
+      if (e.type === 'investment_reversal') return net - e.amount;
+      return net;
+    }, 0);
+  },
+
+  /**
+   * Set the net investment amount linked to a referenceId (expense / raw-material ID).
+   * Adds an 'investment' entry if more is needed, or an 'investment_reversal' if less.
+   * Pass targetAmount=0 to fully revert a previous investment.
+   */
+  async reconcileInvestmentByRef(referenceId, targetAmount, note = '') {
+    const record = await _investorRead();
+    if (!record) throw new Error('No existe un registro de inversionista.');
+    const already = this._netInvestmentForRef(record, referenceId);
+    const target  = Math.max(0, Number(targetAmount) || 0);
+    const delta   = target - already;
+    if (Math.abs(delta) < 0.001) return record;
+    if (delta > 0) {
+      return this.addInvestment(delta, note || `Inversión: ${referenceId}`, referenceId);
+    }
+    // Partial or full reversal of a previous investment
+    const reversal = Math.abs(delta);
+    record.history.push({
+      id: _genId('inv'), type: 'investment_reversal', amount: reversal,
+      date: Date.now(), referenceId: String(referenceId),
+      note: (note || `Reversión de inversión: ${referenceId}`).trim(),
+    });
+    record.totalDebt -= reversal;
+    await _investorWrite(record);
+    return record;
   },
 };
 
@@ -1659,16 +1699,17 @@ export const PayrollAPI = {
 
 function _expenseFromDb(r) {
   return {
-    id:          r.id,
-    expenseDate: r.expense_date,
-    category:    r.category,
-    description: r.description,
-    amount:      Number(r.amount),
-    method:      r.method,
-    notes:       r.notes,
-    attachments: Array.isArray(r.attachments) ? r.attachments : [],
-    createdAt:   r.created_at,
-    updatedAt:   r.updated_at,
+    id:                r.id,
+    expenseDate:       r.expense_date,
+    category:          r.category,
+    description:       r.description,
+    amount:            Number(r.amount),
+    method:            r.method,
+    notes:             r.notes,
+    attachments:       Array.isArray(r.attachments) ? r.attachments : [],
+    investorFinancing: r.investor_financing || null,
+    createdAt:         r.created_at,
+    updatedAt:         r.updated_at,
   };
 }
 
@@ -1689,16 +1730,17 @@ export const ExpensesAPI = {
   async create(d) {
     const now = new Date().toISOString();
     const row = {
-      id:           _genId('exp'),
-      expense_date: d.expenseDate || d.expense_date || '',
-      category:     d.category || '',
-      description:  d.description || '',
-      amount:       Number(d.amount) || 0,
-      method:       d.method || '',
-      notes:        d.notes || '',
-      attachments:  Array.isArray(d.attachments) ? d.attachments : [],
-      created_at:   now,
-      updated_at:   now,
+      id:                 _genId('exp'),
+      expense_date:       d.expenseDate || d.expense_date || '',
+      category:           d.category || '',
+      description:        d.description || '',
+      amount:             Number(d.amount) || 0,
+      method:             d.method || '',
+      notes:              d.notes || '',
+      attachments:        Array.isArray(d.attachments) ? d.attachments : [],
+      investor_financing: d.investorFinancing || null,
+      created_at:         now,
+      updated_at:         now,
     };
     const { data, error } = await _sb.from('expenses').insert(row).select().single();
     if (error) throw new Error(error.message);
@@ -1707,13 +1749,14 @@ export const ExpensesAPI = {
 
   async update(id, d) {
     const u = { updated_at: new Date().toISOString() };
-    if (d.expenseDate  !== undefined) u.expense_date = d.expenseDate;
-    if (d.category     !== undefined) u.category     = d.category;
-    if (d.description  !== undefined) u.description  = d.description;
-    if (d.amount       !== undefined) u.amount       = Number(d.amount) || 0;
-    if (d.method       !== undefined) u.method       = d.method;
-    if (d.notes        !== undefined) u.notes        = d.notes;
-    if (d.attachments  !== undefined) u.attachments  = d.attachments;
+    if (d.expenseDate        !== undefined) u.expense_date       = d.expenseDate;
+    if (d.category           !== undefined) u.category           = d.category;
+    if (d.description        !== undefined) u.description        = d.description;
+    if (d.amount             !== undefined) u.amount             = Number(d.amount) || 0;
+    if (d.method             !== undefined) u.method             = d.method;
+    if (d.notes              !== undefined) u.notes              = d.notes;
+    if (d.attachments        !== undefined) u.attachments        = d.attachments;
+    if (d.investorFinancing  !== undefined) u.investor_financing = d.investorFinancing;
     const { data, error } = await _sb.from('expenses').update(u)
       .eq('id', String(id)).select().single();
     if (error) throw new Error(error.message);

@@ -17,7 +17,7 @@
  * All code identifiers: English
  */
 
-import { ExpensesAPI } from '../api.js';
+import { ExpensesAPI, InvestorAPI } from '../api.js';
 
 // --- Constants ---------------------------------------------------------------
 
@@ -66,6 +66,7 @@ const MAX_ATTACH_MB = 1.5;
 let editingExpense     = null;
 let allExpenses        = [];
 let currentAttachments = [];
+let investorRecord     = null;
 
 let filterDateFrom  = '';
 let filterDateTo    = '';
@@ -190,6 +191,32 @@ function buildModuleHTML() {
             </div>
           </div>
 
+          <!-- Investor Financing (shown only when an investor record exists) -->
+          <div class="exp-investor-section" id="exp-investor-section" style="display:none;">
+            <label class="exp-investor-toggle">
+              <input type="checkbox" id="exp-investor-check">
+              <span class="exp-investor-toggle-label">
+                <strong>Financiado por el inversionista</strong>
+                <span class="form-hint" style="margin:0;">El monto se sumará a la deuda del inversionista</span>
+              </span>
+            </label>
+            <div id="exp-investor-fields" style="display:none;" class="form-grid exp-investor-fields">
+              <div class="form-group">
+                <label class="form-label" for="exp-investor-amount">
+                  Monto financiado (RD$) <span class="required">*</span>
+                </label>
+                <input class="form-input" type="number" id="exp-investor-amount"
+                       min="0.01" step="0.01" placeholder="0.00">
+                <span class="form-error" id="exp-investor-error"></span>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="exp-investor-note">Nota (opcional)</label>
+                <input class="form-input" type="text" id="exp-investor-note" maxlength="120"
+                       placeholder="Ej: Préstamo para pago de electricidad">
+              </div>
+            </div>
+          </div>
+
           <!-- Attachments -->
           <div class="exp-attach-section">
             <div class="exp-attach-header">
@@ -300,7 +327,11 @@ function buildModuleHTML() {
 async function loadExpenses() {
   showTableLoading(true);
   try {
-    allExpenses = await ExpensesAPI.getAll();
+    [allExpenses, investorRecord] = await Promise.all([
+      ExpensesAPI.getAll(),
+      InvestorAPI.get().catch(() => null),
+    ]);
+    renderInvestorSection();
     applyFilters();
   } catch (err) {
     showFeedback(`Error al cargar gastos: ${err.message}`, 'error');
@@ -362,6 +393,9 @@ function buildTableRow(expense) {
     ? `<span class="badge badge--blue" style="cursor:pointer;"
          data-action="view-attach" data-id="${expense.id}">\ud83d\udcce ${attCount}</span>`
     : '<span style="color:var(--color-text-muted);">\u2014</span>';
+  const invBadge    = expense.investorFinancing
+    ? `<span class="badge badge--orange" style="font-size:0.75rem;" title="Financiado por el inversionista: ${formatCurrency(expense.investorFinancing.amount)}">◈ INV</span>`
+    : '';
 
   return `
     <tr class="table-row">
@@ -369,7 +403,7 @@ function buildTableRow(expense) {
       <td><span class="badge badge--teal" style="font-size:0.78rem;">${escapeHTML(expense.category || '\u2014')}</span></td>
       <td>${escapeHTML(expense.description || '\u2014')}</td>
       <td class="text-right" style="font-family:var(--font-mono);white-space:nowrap;">${formatCurrency(expense.amount)}</td>
-      <td><span class="badge badge--gray" style="font-size:0.78rem;">${escapeHTML(methodLabel)}</span></td>
+      <td><span class="badge badge--gray" style="font-size:0.78rem;">${escapeHTML(methodLabel)}</span>${invBadge ? ' ' + invBadge : ''}</td>
       <td class="text-center">${attBadge}</td>
       <td class="text-center td-actions">
         <button class="btn btn--ghost btn--xs" data-action="edit" data-id="${expense.id}"
@@ -388,6 +422,19 @@ function attachFormListeners() {
     .addEventListener('submit', handleFormSubmit);
   document.getElementById('expenses-cancel-btn')
     .addEventListener('click', resetFormToCreateMode);
+
+  // Investor financing checkbox — show/hide amount fields
+  document.getElementById('exp-investor-check')
+    .addEventListener('change', e => {
+      const fields  = document.getElementById('exp-investor-fields');
+      fields.style.display = e.target.checked ? '' : 'none';
+      if (e.target.checked) {
+        // Pre-fill with current expense amount
+        const amt = parseFloat(document.getElementById('exp-field-amount').value) || 0;
+        const amtInput = document.getElementById('exp-investor-amount');
+        if (!amtInput.value) amtInput.value = amt > 0 ? amt : '';
+      }
+    });
 
   // File input
   document.getElementById('exp-file-input')
@@ -409,22 +456,52 @@ async function handleFormSubmit(e) {
   setButtonLoading(submitBtn, true);
 
   try {
+    // Collect investor financing fields
+    const investorChecked = document.getElementById('exp-investor-check')?.checked && investorRecord;
+    const investorAmount  = investorChecked
+      ? (parseFloat(document.getElementById('exp-investor-amount').value) || 0)
+      : 0;
+    const investorNote    = investorChecked
+      ? document.getElementById('exp-investor-note').value.trim()
+      : '';
+
+    // Validate investor amount when checked
+    if (investorChecked && investorAmount <= 0) {
+      document.getElementById('exp-investor-error').textContent = 'El monto financiado debe ser mayor a 0.';
+      setButtonLoading(submitBtn, false);
+      return;
+    }
+
+    const investorFinancing = investorChecked
+      ? { amount: investorAmount, note: investorNote }
+      : null;
+
     const payload = {
-      expenseDate: document.getElementById('exp-field-date').value,
-      category:    document.getElementById('exp-field-category').value,
-      method:      document.getElementById('exp-field-method').value,
-      amount:      parseFloat(document.getElementById('exp-field-amount').value) || 0,
-      description: document.getElementById('exp-field-description').value.trim(),
-      notes:       document.getElementById('exp-field-notes').value.trim(),
-      attachments: [...currentAttachments],
+      expenseDate:       document.getElementById('exp-field-date').value,
+      category:          document.getElementById('exp-field-category').value,
+      method:            document.getElementById('exp-field-method').value,
+      amount:            parseFloat(document.getElementById('exp-field-amount').value) || 0,
+      description:       document.getElementById('exp-field-description').value.trim(),
+      notes:             document.getElementById('exp-field-notes').value.trim(),
+      attachments:       [...currentAttachments],
+      investorFinancing,
     };
 
+    let savedExpense;
     if (editingExpense) {
-      await ExpensesAPI.update(editingExpense.id, payload);
+      savedExpense = await ExpensesAPI.update(editingExpense.id, payload);
       showFeedback('Gasto actualizado correctamente.', 'success');
     } else {
-      await ExpensesAPI.create(payload);
+      savedExpense = await ExpensesAPI.create(payload);
       showFeedback('Gasto registrado correctamente.', 'success');
+    }
+
+    // Sync investor debt: reconcile covers create, edit (delta), and removal
+    if (investorRecord) {
+      const expenseId  = savedExpense.id;
+      const targetAmt  = investorFinancing ? investorFinancing.amount : 0;
+      const noteForInv = investorNote || `Gasto: ${payload.description || expenseId}`;
+      await InvestorAPI.reconcileInvestmentByRef(expenseId, targetAmt, noteForInv);
     }
 
     resetFormToCreateMode();
@@ -452,6 +529,19 @@ function handleEdit(expenseId) {
   document.getElementById('exp-field-description').value = expense.description || '';
   document.getElementById('exp-field-notes').value       = expense.notes || '';
 
+  // Populate investor financing fields if applicable
+  const invCheck  = document.getElementById('exp-investor-check');
+  const invFields = document.getElementById('exp-investor-fields');
+  const invAmt    = document.getElementById('exp-investor-amount');
+  const invNote   = document.getElementById('exp-investor-note');
+  if (invCheck) {
+    const fin = expense.investorFinancing;
+    invCheck.checked         = !!fin;
+    invFields.style.display  = fin ? '' : 'none';
+    invAmt.value             = fin ? fin.amount : '';
+    invNote.value            = fin ? (fin.note || '') : '';
+  }
+
   renderAttachmentList();
 
   document.getElementById('expenses-form-title').innerHTML =
@@ -471,6 +561,13 @@ async function handleDelete(expenseId) {
   if (!confirm(`\u00bfEliminar "${label}"?\n\nEsta acci\u00f3n no se puede deshacer.`)) return;
 
   try {
+    // Revert investor financing before deleting
+    if (expense.investorFinancing && investorRecord) {
+      await InvestorAPI.reconcileInvestmentByRef(
+        expenseId, 0, `Reversión por eliminación de gasto: ${expense.description || expenseId}`
+      );
+    }
+
     await ExpensesAPI.remove(expenseId);
     showFeedback('Gasto eliminado.', 'success');
 
@@ -492,6 +589,14 @@ function resetFormToCreateMode() {
   document.getElementById('exp-field-id').value   = '';
   document.getElementById('exp-field-date').value = todayString();
 
+  // Reset investor financing section
+  const invCheck  = document.getElementById('exp-investor-check');
+  const invFields = document.getElementById('exp-investor-fields');
+  if (invCheck)  invCheck.checked        = false;
+  if (invFields) invFields.style.display = 'none';
+  const invError = document.getElementById('exp-investor-error');
+  if (invError)  invError.textContent    = '';
+
   renderAttachmentList();
   clearFormErrors();
 
@@ -501,6 +606,15 @@ function resetFormToCreateMode() {
     '<span class="btn__icon">\uff0b</span> Registrar Gasto';
   document.getElementById('expenses-cancel-btn').style.display = 'none';
   document.getElementById('exp-file-input').value = '';
+}
+
+// --- Investor Section ---------------------------------------------------------
+
+/** Show or hide the investor financing section based on whether an investor is configured. */
+function renderInvestorSection() {
+  const section = document.getElementById('exp-investor-section');
+  if (!section) return;
+  section.style.display = investorRecord ? '' : 'none';
 }
 
 // --- Filter Coordinator ------------------------------------------------------
@@ -767,6 +881,28 @@ function injectStyles() {
       white-space: nowrap; font-size: 0.85rem;
     }
     .exp-attach-size { font-size: 0.75rem; color: var(--color-text-muted); flex-shrink: 0; }
+
+    .exp-investor-section {
+      border-top: 1px solid var(--color-border);
+      margin-top: var(--space-lg); padding-top: var(--space-lg);
+    }
+    .exp-investor-toggle {
+      display: flex; align-items: flex-start; gap: var(--space-sm);
+      cursor: pointer;
+    }
+    .exp-investor-toggle input[type="checkbox"] {
+      margin-top: 2px; flex-shrink: 0; accent-color: var(--color-warning, #f59e0b);
+    }
+    .exp-investor-toggle-label {
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .exp-investor-fields {
+      margin-top: var(--space-md);
+      padding: var(--space-md);
+      background: color-mix(in srgb, var(--color-warning, #f59e0b) 8%, transparent);
+      border: 1px solid color-mix(in srgb, var(--color-warning, #f59e0b) 30%, transparent);
+      border-radius: var(--radius-md);
+    }
   `;
   document.head.appendChild(tag);
 }
