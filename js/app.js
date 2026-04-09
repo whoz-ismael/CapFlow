@@ -66,7 +66,7 @@ const ROUTES = {
     },
   },
 
-  clients: {
+  customers: {
     title: 'Clientes — CapFlow',
     loader: async (container) => {
       const { mountCustomers } = await import('./modules/customers.js');
