@@ -592,6 +592,8 @@ function buildSalesReportOutput(from, to, customerId) {
   const totalCost    = sales.reduce((s, x) => s + (x.totals?.cost    || 0), 0);
   const totalProfit  = sales.reduce((s, x) => s + (x.totals?.profit  || 0), 0);
   const totalMargin  = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : null;
+  const totalUnits   = sales.reduce((s, x) =>
+    s + (Array.isArray(x.lines) ? x.lines.reduce((q, l) => q + (Number(l.quantity) || 0), 0) : 0), 0);
 
   // ── Period label ──────────────────────────────────────────────────────────
   const customerName = customerId
@@ -688,7 +690,8 @@ function buildSalesReportOutput(from, to, customerId) {
               <th>Fecha</th>
               <th>Factura</th>
               <th>Cliente</th>
-              <th>Líneas</th>
+              <th class="text-right">Líneas</th>
+              <th class="text-right">Tapas</th>
               <th class="text-right">Ingresos</th>
               <th class="text-right">Costos</th>
               <th class="text-right">Ganancia</th>
@@ -697,17 +700,21 @@ function buildSalesReportOutput(from, to, customerId) {
           </thead>
           <tbody>
             ${sales.map(s => {
-              const t    = s.totals || {};
-              const m    = t.revenue > 0
+              const t     = s.totals || {};
+              const m     = t.revenue > 0
                 ? ((t.profit || 0) / t.revenue * 100).toFixed(1) + ' %' : '—';
-              const cust = _customerMap.get(String(s.clientId || ''))?.name || '—';
+              const cust  = _customerMap.get(String(s.clientId || ''))?.name || '—';
               const lines = Array.isArray(s.lines) ? s.lines.length : '—';
+              const units = Array.isArray(s.lines)
+                ? s.lines.reduce((q, l) => q + (Number(l.quantity) || 0), 0)
+                : '—';
               return `<tr>
                 <td style="white-space:nowrap;">${escapeHTML(formatDateLabel(s.saleDate || ''))}</td>
                 <td style="font-family:var(--font-mono);font-size:0.8rem;">
                   ${escapeHTML(s.invoiceNumber || '—')}</td>
                 <td>${escapeHTML(cust)}</td>
                 <td class="text-right">${lines}</td>
+                <td class="text-right" style="font-family:var(--font-mono);">${units}</td>
                 <td class="text-right">${formatCurrency(t.revenue || 0)}</td>
                 <td class="text-right">${formatCurrency(t.cost    || 0)}</td>
                 <td class="text-right ${(t.profit || 0) >= 0 ? 'rpt-positive' : 'rpt-negative'}">
@@ -719,6 +726,7 @@ function buildSalesReportOutput(from, to, customerId) {
           <tfoot>
             <tr>
               <th colspan="4">Total (${formatNumber(sales.length)} ventas)</th>
+              <th class="text-right" style="font-family:var(--font-mono);">${formatNumber(totalUnits)}</th>
               <th class="text-right">${formatCurrency(totalRevenue)}</th>
               <th class="text-right">${formatCurrency(totalCost)}</th>
               <th class="text-right">${formatCurrency(totalProfit)}</th>
