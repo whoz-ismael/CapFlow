@@ -1373,6 +1373,32 @@ function ensureConfirmModalInDOM() {
               </div>
             </div>
 
+            <!-- Financiamiento del Inversionista -->
+            <div class="rm-investor-section" id="rm-confirm-investor-section" style="display:none;">
+              <label class="rm-investor-toggle">
+                <input type="checkbox" id="rm-confirm-investor-check">
+                <span class="rm-investor-toggle-label">
+                  <strong>Financiado por el inversionista</strong>
+                  <span class="form-hint" style="margin:0;">El monto se sumará a la deuda del inversionista</span>
+                </span>
+              </label>
+              <div id="rm-confirm-investor-fields" style="display:none;" class="rm-investor-fields" style="margin-top:var(--space-md);">
+                <div class="form-group">
+                  <label class="form-label" for="rm-confirm-investor-amount">
+                    Monto financiado (RD$) <span class="required">*</span>
+                  </label>
+                  <input class="form-input" type="number" id="rm-confirm-investor-amount"
+                         min="0.01" step="0.01" placeholder="0.00">
+                  <span class="form-error" id="rm-confirm-investor-error"></span>
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="rm-confirm-investor-note">Nota (opcional)</label>
+                  <input class="form-input" type="text" id="rm-confirm-investor-note" maxlength="120"
+                         placeholder="Ej: Préstamo para compra de material">
+                </div>
+              </div>
+            </div>
+
           </form>
         </div>
 
@@ -1422,6 +1448,13 @@ function attachConfirmModalListeners() {
 
   form.removeEventListener('submit', handleConfirmFormSubmit);
   form.addEventListener(   'submit', handleConfirmFormSubmit);
+
+  // Investor financing checkbox — show/hide fields
+  const invCheck = document.getElementById('rm-confirm-investor-check');
+  if (invCheck) {
+    invCheck.removeEventListener('change', _onConfirmInvestorCheckChange);
+    invCheck.addEventListener(   'change', _onConfirmInvestorCheckChange);
+  }
 }
 
 function _onConfirmModalEscape(e) {
@@ -1430,6 +1463,16 @@ function _onConfirmModalEscape(e) {
     if (modal && !modal.classList.contains('provider-modal--hidden')) {
       closeConfirmModal();
     }
+  }
+}
+
+function _onConfirmInvestorCheckChange(e) {
+  const fields = document.getElementById('rm-confirm-investor-fields');
+  if (fields) fields.style.display = e.target.checked ? '' : 'none';
+  if (e.target.checked) {
+    const cost = parseFloat(document.getElementById('rm-confirm-cost').value) || 0;
+    const amtInput = document.getElementById('rm-confirm-investor-amount');
+    if (amtInput && !amtInput.value) amtInput.value = cost > 0 ? cost : '';
   }
 }
 
@@ -1445,6 +1488,14 @@ function openConfirmModal(receipt) {
   document.getElementById('rm-confirm-form').reset();
   document.querySelectorAll('#rm-confirm-form .form-error')
     .forEach(el => (el.textContent = ''));
+
+  // Show/hide investor section and reset its fields
+  const invSection = document.getElementById('rm-confirm-investor-section');
+  const invFields  = document.getElementById('rm-confirm-investor-fields');
+  const invCheck   = document.getElementById('rm-confirm-investor-check');
+  if (invSection) invSection.style.display = investorRecord ? '' : 'none';
+  if (invFields)  invFields.style.display  = 'none';
+  if (invCheck)   invCheck.checked         = false;
 
   // Pre-fill hidden id and date
   document.getElementById('rm-confirm-receipt-id').value = receipt.id;
@@ -1541,8 +1592,24 @@ async function handleConfirmFormSubmit(e) {
   const saveBtn = document.getElementById('rm-confirm-submit-btn');
   setButtonLoading(saveBtn, true);
 
+  // Read investor financing fields
+  const invChecked    = document.getElementById('rm-confirm-investor-check')?.checked && investorRecord;
+  const invAmount     = invChecked
+    ? (parseFloat(document.getElementById('rm-confirm-investor-amount').value) || 0)
+    : 0;
+  const invNote       = invChecked
+    ? (document.getElementById('rm-confirm-investor-note').value.trim())
+    : '';
+
+  if (invChecked && invAmount <= 0) {
+    const errEl = document.getElementById('rm-confirm-investor-error');
+    if (errEl) errEl.textContent = 'El monto financiado debe ser mayor a 0.';
+    showFeedback('Verifica el monto de financiamiento del inversionista.', 'error');
+    return;
+  }
+
   try {
-    await MaterialReceiptsAPI.confirm(
+    const newRecord = await MaterialReceiptsAPI.confirm(
       confirmingReceipt.id,
       {
         date,
@@ -1556,6 +1623,13 @@ async function handleConfirmFormSubmit(e) {
       },
       confirmingReceipt
     );
+
+    // Record investor financing in the investor's history
+    if (invChecked && invAmount > 0) {
+      const typeLabel = getMaterialTypeLabel(confirmingReceipt.type);
+      const note      = invNote || `Materia prima (recibo operario): ${typeLabel} — ${date}`;
+      await InvestorAPI.addInvestment(invAmount, note, newRecord.id);
+    }
 
     showFeedback('Entrada confirmada y compra registrada correctamente.', 'success');
     closeConfirmModal();
