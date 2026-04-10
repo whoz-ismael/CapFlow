@@ -43,6 +43,7 @@ import { RawMaterialsAPI }            from '../api.js';
 import { MonthlyInventoryAPI }        from '../api.js';
 import { InvestorAPI }                from '../api.js';
 import { SalePaymentsAPI }            from '../api.js';
+import { nextInvoiceNumber }          from '../api.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -157,9 +158,9 @@ function buildShellHTML() {
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="sale-field-invoice">N° Factura (opcional)</label>
+            <label class="form-label" for="sale-field-invoice">N° Factura</label>
             <input class="form-input" type="text" id="sale-field-invoice"
-              placeholder="Ej: FAC-0001" maxlength="40">
+              placeholder="Generando…" maxlength="40">
           </div>
 
           <div class="form-group form-group--wide">
@@ -1293,6 +1294,18 @@ function resetForm() {
     '<span class="btn__icon">＋</span> Guardar Venta';
   document.getElementById('sales-cancel-btn').style.display = 'none';
   document.getElementById('sale-file-input').value = '';
+
+  _prefillInvoiceNumber();
+}
+
+async function _prefillInvoiceNumber() {
+  const field = document.getElementById('sale-field-invoice');
+  if (!field || field.value) return;
+  try {
+    field.value = await nextInvoiceNumber('FAC-');
+  } catch (_) {
+    // Leave empty so admin can type the number manually
+  }
 }
 
 // ─── Line Management ──────────────────────────────────────────────────────────
