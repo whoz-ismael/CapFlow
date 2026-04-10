@@ -920,22 +920,23 @@ async function _handleAddPayment(saleId, revenue) {
 /**
  * Handle deleting a single payment entry.
  */
-async function _handleDeletePayment(paymentId, saleId, revenue) {
-  if (!confirm('¿Eliminar este pago? Esta acción no se puede deshacer.')) return;
-  try {
-    await SalePaymentsAPI.remove(paymentId);
+function _handleDeletePayment(paymentId, saleId, revenue) {
+  _showDeleteConfirm('¿Eliminar este pago? Esta acción no se puede deshacer.', async () => {
+    try {
+      await SalePaymentsAPI.remove(paymentId);
 
-    // Update in-memory map
-    const key = String(saleId);
-    const list = _paymentsMap.get(key) || [];
-    _paymentsMap.set(key, list.filter(p => String(p.id) !== String(paymentId)));
+      // Update in-memory map
+      const key = String(saleId);
+      const list = _paymentsMap.get(key) || [];
+      _paymentsMap.set(key, list.filter(p => String(p.id) !== String(paymentId)));
 
-    _renderArPaymentsList(saleId, revenue);
-    _refreshSaleRowBadge(saleId);
-    showFeedback('Pago eliminado.', 'success');
-  } catch (err) {
-    showFeedback(`Error al eliminar pago: ${err.message}`, 'error');
-  }
+      _renderArPaymentsList(saleId, revenue);
+      _refreshSaleRowBadge(saleId);
+      showFeedback('Pago eliminado.', 'success');
+    } catch (err) {
+      showFeedback(`Error al eliminar pago: ${err.message}`, 'error');
+    }
+  });
 }
 
 /**
