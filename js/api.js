@@ -1925,7 +1925,7 @@ export async function nextInvoiceNumber(prefix = 'FAC-') {
 
 export const DailyProductionLogsAPI = {
   async getAll({ status, operatorId, dateFrom, dateTo } = {}) {
-    let query = supabase
+    let query = _sb
       .from('daily_production_logs')
       .select('*')
       .order('production_date', { ascending: false })
@@ -1942,7 +1942,7 @@ export const DailyProductionLogsAPI = {
   },
 
   async confirm(id) {
-    const { data, error } = await supabase
+    const { data, error } = await _sb
       .from('daily_production_logs')
       .update({
         status:       'confirmed',
@@ -1961,7 +1961,7 @@ export const DailyProductionLogsAPI = {
 
 export const DispatchOperatorsAPI = {
   async getAll() {
-    const { data, error } = await supabase
+    const { data, error } = await _sb
       .from('dispatch_operators')
       .select('id, name, role, is_active')
       .eq('is_active', true)
