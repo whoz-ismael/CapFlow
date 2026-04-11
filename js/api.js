@@ -1920,3 +1920,53 @@ export async function nextInvoiceNumber(prefix = 'FAC-') {
   const num  = parseInt(last.replace(prefix, ''), 10) || 0;
   return `${prefix}${String(num + 1).padStart(3, '0')}`;
 }
+
+// ─── Daily Production Logs ────────────────────────────────────────────────────
+
+export const DailyProductionLogsAPI = {
+  async getAll({ status, operatorId, dateFrom, dateTo } = {}) {
+    let query = supabase
+      .from('daily_production_logs')
+      .select('*')
+      .order('production_date', { ascending: false })
+      .order('created_at',      { ascending: false });
+
+    if (status)     query = query.eq('status', status);
+    if (operatorId) query = query.eq('operator_id', operatorId);
+    if (dateFrom)   query = query.gte('production_date', dateFrom);
+    if (dateTo)     query = query.lte('production_date', dateTo);
+
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  },
+
+  async confirm(id) {
+    const { data, error } = await supabase
+      .from('daily_production_logs')
+      .update({
+        status:       'confirmed',
+        confirmed_at: new Date().toISOString(),
+        updated_at:   new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+};
+
+// ─── Dispatch Operators ───────────────────────────────────────────────────────
+
+export const DispatchOperatorsAPI = {
+  async getAll() {
+    const { data, error } = await supabase
+      .from('dispatch_operators')
+      .select('id, name, role, is_active')
+      .eq('is_active', true)
+      .order('name', { ascending: true });
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  },
+};

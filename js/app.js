@@ -50,6 +50,14 @@ const ROUTES = {
     },
   },
 
+  'daily-production': {
+    title: 'Producción Diaria — CapFlow',
+    loader: async (container) => {
+      const { mountDailyProduction } = await import('./modules/daily-production.js');
+      await mountDailyProduction(container);
+    },
+  },
+
   operators: {
     title: 'Operarios — CapFlow',
     loader: async (container) => {
