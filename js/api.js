@@ -1920,3 +1920,91 @@ export async function nextInvoiceNumber(prefix = 'FAC-') {
   const num  = parseInt(last.replace(prefix, ''), 10) || 0;
   return `${prefix}${String(num + 1).padStart(3, '0')}`;
 }
+
+
+// ─── Daily Production Logs ────────────────────────────────────────────────────
+
+/**
+ * DailyProductionLogsAPI — Read and confirm daily production log entries.
+ *
+ * Table: daily_production_logs
+ * Fields: id, operator_id, operator_name, production_date, month,
+ *         color, quantity, notes, status, confirmed_at, created_at, updated_at
+ *
+ * Status flow: 'pending_review' → 'confirmed'
+ */
+export const DailyProductionLogsAPI = {
+  /**
+   * Fetch production log entries with optional filters.
+   *
+   * @param {Object}  [opts]
+   * @param {string}  [opts.status]       - 'pending_review' | 'confirmed'
+   * @param {string}  [opts.operatorId]   - Filter by operator UUID
+   * @param {string}  [opts.dateFrom]     - ISO date string (inclusive)
+   * @param {string}  [opts.dateTo]       - ISO date string (inclusive)
+   * @returns {Promise<Array>}
+   */
+  async getAll({ status, operatorId, dateFrom, dateTo } = {}) {
+    let query = supabase
+      .from('daily_production_logs')
+      .select('*')
+      .order('production_date', { ascending: false })
+      .order('created_at',      { ascending: false });
+
+    if (status)     query = query.eq('status', status);
+    if (operatorId) query = query.eq('operator_id', operatorId);
+    if (dateFrom)   query = query.gte('production_date', dateFrom);
+    if (dateTo)     query = query.lte('production_date', dateTo);
+
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  },
+
+  /**
+   * Confirm a production log entry (status: pending_review → confirmed).
+   *
+   * @param {string} id - Entry ID
+   * @returns {Promise<Object>} Updated entry
+   */
+  async confirm(id) {
+    const { data, error } = await supabase
+      .from('daily_production_logs')
+      .update({
+        status:       'confirmed',
+        confirmed_at: new Date().toISOString(),
+        updated_at:   new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    return data;
+  },
+};
+
+// ─── Dispatch Operators ───────────────────────────────────────────────────────
+
+/**
+ * DispatchOperatorsAPI — Read operators registered in CapDispatch.
+ *
+ * Table: dispatch_operators
+ * Fields: id, name, role, is_active
+ */
+export const DispatchOperatorsAPI = {
+  /**
+   * Fetch all active dispatch operators.
+   * @returns {Promise<Array>}
+   */
+  async getAll() {
+    const { data, error } = await supabase
+      .from('dispatch_operators')
+      .select('id, name, role, is_active')
+      .eq('is_active', true)
+      .order('name', { ascending: true });
+
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  },
+};
