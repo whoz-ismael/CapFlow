@@ -51,7 +51,7 @@ const ROUTES = {
   },
 
   'daily-production': {
-    title: 'Producción Diaria — CapFlow',
+    title: 'Tapas Diarias — CapFlow',
     loader: async (container) => {
       const { mountDailyProduction } = await import('./modules/daily-production.js');
       await mountDailyProduction(container);
