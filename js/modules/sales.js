@@ -43,6 +43,7 @@ import { RawMaterialsAPI }            from '../api.js';
 import { MonthlyInventoryAPI }        from '../api.js';
 import { InvestorAPI }                from '../api.js';
 import { SalePaymentsAPI }            from '../api.js';
+import { nextInvoiceNumber }          from '../api.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -157,9 +158,9 @@ function buildShellHTML() {
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="sale-field-invoice">N° Factura (opcional)</label>
+            <label class="form-label" for="sale-field-invoice">N° Factura</label>
             <input class="form-input" type="text" id="sale-field-invoice"
-              placeholder="Ej: FAC-0001" maxlength="40">
+              placeholder="Generando…" maxlength="40">
           </div>
 
           <div class="form-group form-group--wide">
@@ -919,22 +920,23 @@ async function _handleAddPayment(saleId, revenue) {
 /**
  * Handle deleting a single payment entry.
  */
-async function _handleDeletePayment(paymentId, saleId, revenue) {
-  if (!confirm('¿Eliminar este pago? Esta acción no se puede deshacer.')) return;
-  try {
-    await SalePaymentsAPI.remove(paymentId);
+function _handleDeletePayment(paymentId, saleId, revenue) {
+  _showDeleteConfirm('¿Eliminar este pago? Esta acción no se puede deshacer.', async () => {
+    try {
+      await SalePaymentsAPI.remove(paymentId);
 
-    // Update in-memory map
-    const key = String(saleId);
-    const list = _paymentsMap.get(key) || [];
-    _paymentsMap.set(key, list.filter(p => String(p.id) !== String(paymentId)));
+      // Update in-memory map
+      const key = String(saleId);
+      const list = _paymentsMap.get(key) || [];
+      _paymentsMap.set(key, list.filter(p => String(p.id) !== String(paymentId)));
 
-    _renderArPaymentsList(saleId, revenue);
-    _refreshSaleRowBadge(saleId);
-    showFeedback('Pago eliminado.', 'success');
-  } catch (err) {
-    showFeedback(`Error al eliminar pago: ${err.message}`, 'error');
-  }
+      _renderArPaymentsList(saleId, revenue);
+      _refreshSaleRowBadge(saleId);
+      showFeedback('Pago eliminado.', 'success');
+    } catch (err) {
+      showFeedback(`Error al eliminar pago: ${err.message}`, 'error');
+    }
+  });
 }
 
 /**
@@ -1293,6 +1295,18 @@ function resetForm() {
     '<span class="btn__icon">＋</span> Guardar Venta';
   document.getElementById('sales-cancel-btn').style.display = 'none';
   document.getElementById('sale-file-input').value = '';
+
+  _prefillInvoiceNumber();
+}
+
+async function _prefillInvoiceNumber() {
+  const field = document.getElementById('sale-field-invoice');
+  if (!field || field.value) return;
+  try {
+    field.value = await nextInvoiceNumber('FAC-');
+  } catch (_) {
+    // Leave empty so admin can type the number manually
+  }
 }
 
 // ─── Line Management ──────────────────────────────────────────────────────────

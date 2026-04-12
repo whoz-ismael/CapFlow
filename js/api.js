@@ -1893,3 +1893,80 @@ export const ChangeHistoryAPI = {
     return data ?? [];
   },
 };
+
+// =============================================================================
+// INVOICE NUMBERING
+//
+// Calls the Supabase RPC `next_invoice_number(p_prefix)` which atomically
+// increments a counter and returns the next formatted number (e.g. "FAC-007").
+// Falls back to a direct MAX query if the RPC is unavailable.
+// =============================================================================
+
+export async function nextInvoiceNumber(prefix = 'FAC-') {
+  const { data, error } = await _sb.rpc('next_invoice_number', { p_prefix: prefix });
+  if (!error && data) return data;
+
+  // Fallback: derive next number from existing invoices (non-atomic but safe for
+  // low-concurrency environments while the migration has not been applied yet).
+  const { data: rows } = await _sb
+    .from('sales')
+    .select('invoice_number')
+    .like('invoice_number', `${prefix}%`)
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (!rows || rows.length === 0) return `${prefix}001`;
+  const last = rows[0].invoice_number;
+  const num  = parseInt(last.replace(prefix, ''), 10) || 0;
+  return `${prefix}${String(num + 1).padStart(3, '0')}`;
+}
+
+// ─── Daily Production Logs ────────────────────────────────────────────────────
+
+export const DailyProductionLogsAPI = {
+  async getAll({ status, operatorId, dateFrom, dateTo } = {}) {
+    let query = _sb
+      .from('daily_production_logs')
+      .select('*')
+      .order('production_date', { ascending: false })
+      .order('created_at',      { ascending: false });
+
+    if (status)     query = query.eq('status', status);
+    if (operatorId) query = query.eq('operator_id', operatorId);
+    if (dateFrom)   query = query.gte('production_date', dateFrom);
+    if (dateTo)     query = query.lte('production_date', dateTo);
+
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  },
+
+  async confirm(id) {
+    const { data, error } = await _sb
+      .from('daily_production_logs')
+      .update({
+        status:       'confirmed',
+        confirmed_at: new Date().toISOString(),
+        updated_at:   new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+};
+
+// ─── Dispatch Operators ───────────────────────────────────────────────────────
+
+export const DispatchOperatorsAPI = {
+  async getAll() {
+    const { data, error } = await _sb
+      .from('dispatch_operators')
+      .select('id, name, role, is_active')
+      .eq('is_active', true)
+      .order('name', { ascending: true });
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  },
+};
