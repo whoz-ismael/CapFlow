@@ -144,3 +144,50 @@ export const ChangeHistoryAPI = {
     return data ?? [];
   },
 };
+
+// ─── Daily Production (from CapDispatch) ─────────────────────────────────────
+
+/**
+ * DailyProductionAPI — Read and confirm production log entries from CapDispatch.
+ *
+ * Reads from the shared `daily_production_logs` Supabase table populated by CapDispatch.
+ * The `color` field stores the manufactured product name (e.g. "Tapa Roja").
+ */
+export const DailyProductionAPI = {
+  /**
+   * Fetch production log entries, ordered by date then creation time (desc).
+   *
+   * @param {Object}  [filters]
+   * @param {string}  [filters.month]   - Filter by month in YYYY-MM format
+   * @param {string}  [filters.status]  - Filter by status: 'pending_review' | 'confirmed'
+   * @returns {Promise<Array>}
+   */
+  async getAll({ month, status } = {}) {
+    let query = supabase
+      .from('daily_production_logs')
+      .select('id, operator_name, production_date, color, quantity, notes, status, created_at')
+      .order('production_date', { ascending: false })
+      .order('created_at',      { ascending: false });
+
+    if (month)  query = query.eq('month', month);
+    if (status) query = query.eq('status', status);
+
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  },
+
+  /**
+   * Mark a production log entry as confirmed.
+   *
+   * @param {string} id - Record ID
+   * @returns {Promise<void>}
+   */
+  async confirm(id) {
+    const { error } = await supabase
+      .from('daily_production_logs')
+      .update({ status: 'confirmed' })
+      .eq('id', id);
+    if (error) throw new Error(error.message);
+  },
+};

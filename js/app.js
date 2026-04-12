@@ -48,6 +48,14 @@ const ROUTES = {
     },
   },
 
+  tapas_diarias: {
+    title: 'Tapas Diarias — CapFlow',
+    loader: async (container) => {
+      const { mountTapasDiarias } = await import('./modules/tapas_diarias.js');
+      mountTapasDiarias(container);
+    },
+  },
+
   clients: {
     title: 'Clientes — CapFlow',
     loader: async (container) => {
