@@ -8,34 +8,14 @@
 import { DailyProductionLogsAPI } from '../api.js';
 import { DispatchOperatorsAPI }   from '../api.js';
 
-// ─── Color map (matches CapDispatch constraint) ────────────────────────────────
-
-const COLORS = [
-  { value: 'negro',        label: 'Negro',        dot: '#374151' },
-  { value: 'blanco',       label: 'Blanco',        dot: '#e5e7eb' },
-  { value: 'azul',         label: 'Azul',          dot: '#3b82f6' },
-  { value: 'rojo',         label: 'Rojo',          dot: '#ef4444' },
-  { value: 'verde',        label: 'Verde',         dot: '#22c55e' },
-  { value: 'amarillo',     label: 'Amarillo',      dot: '#eab308' },
-  { value: 'naranja',      label: 'Naranja',       dot: '#f97316' },
-  { value: 'marron',       label: 'Marrón',        dot: '#92400e' },
-  { value: 'transparente', label: 'Transparente',  dot: '#4a556b' },
-  { value: 'rosa',         label: 'Rosa',          dot: '#ec4899' },
-  { value: 'gris',         label: 'Gris',          dot: '#6b7280' },
-  { value: 'morado',       label: 'Morado',        dot: '#8b5cf6' },
-  { value: 'otro',         label: 'Otro',          dot: '#4a556b' },
-];
-
-const colorMap = Object.fromEntries(COLORS.map(c => [c.value, c]));
-
-// ─── Module state ─────────────────────────────────────────────────────────────
+// ─── Module state ─────────────────────────────────────────────────────────────────────────
 
 let allEntries   = [];
 let allOperators = [];
 let filters      = { status: '', operatorId: '', dateFrom: '', dateTo: '' };
 let _container   = null;
 
-// ─── Entry point ──────────────────────────────────────────────────────────────
+// ─── Entry point ─────────────────────────────────────────────────────────────────────────
 
 export async function mountDailyProduction(container) {
   _container = container;
@@ -44,7 +24,7 @@ export async function mountDailyProduction(container) {
   await loadData();
 }
 
-// ─── HTML ─────────────────────────────────────────────────────────────────────
+// ─── HTML ─────────────────────────────────────────────────────────────────────────────
 
 function buildModuleHTML() {
   return `
@@ -119,7 +99,7 @@ function buildModuleHTML() {
               <tr>
                 <th>Fecha</th>
                 <th>Operario</th>
-                <th>Color</th>
+                <th>Producto</th>
                 <th class="text-right">Cantidad</th>
                 <th>Notas</th>
                 <th class="text-center">Estado</th>
@@ -137,7 +117,7 @@ function buildModuleHTML() {
   `;
 }
 
-// ─── Event listeners ──────────────────────────────────────────────────────────
+// ─── Event listeners ────────────────────────────────────────────────────────────────────
 
 function attachEventListeners() {
   _container.querySelector('#dp-refresh').addEventListener('click', loadData);
@@ -145,7 +125,7 @@ function attachEventListeners() {
   _container.querySelector('#dp-clear-filters').addEventListener('click', clearFilters);
 }
 
-// ─── Data ─────────────────────────────────────────────────────────────────────
+// ─── Data ─────────────────────────────────────────────────────────────────────────────
 
 async function loadData() {
   try {
@@ -177,7 +157,7 @@ function populateOperatorDropdown() {
   });
 }
 
-// ─── Filters ──────────────────────────────────────────────────────────────────
+// ─── Filters ──────────────────────────────────────────────────────────────────────────
 
 async function applyFilters() {
   filters.status     = _container.querySelector('#dp-filter-status').value;
@@ -196,7 +176,7 @@ function clearFilters() {
   loadData();
 }
 
-// ─── Table ────────────────────────────────────────────────────────────────────
+// ─── Table ────────────────────────────────────────────────────────────────────────────
 
 function renderTable(entries) {
   const tbody = _container.querySelector('#dp-tbody');
@@ -218,7 +198,6 @@ function renderTable(entries) {
 }
 
 function buildTableRow(entry) {
-  const c = colorMap[entry.color] || { label: entry.color, dot: '#4a556b' };
   const date = new Date(entry.production_date + 'T12:00:00');
   const dateStr = date.toLocaleDateString('es-DO', { day: '2-digit', month: 'short', year: 'numeric' });
 
@@ -234,12 +213,7 @@ function buildTableRow(entry) {
     <tr class="table-row" data-entry-id="${entry.id}">
       <td style="white-space:nowrap;font-family:var(--font-mono);font-size:.82rem;color:var(--color-text-secondary);">${dateStr}</td>
       <td style="font-weight:500;">${entry.operator_name}</td>
-      <td>
-        <span style="display:inline-flex;align-items:center;gap:.4rem;">
-          <span style="width:.625rem;height:.625rem;border-radius:50%;background:${c.dot};flex-shrink:0;display:inline-block;border:1px solid rgba(255,255,255,.15);"></span>
-          ${c.label}
-        </span>
-      </td>
+      <td>${entry.color}</td>
       <td class="text-right" style="font-family:var(--font-mono);font-weight:600;">${entry.quantity.toLocaleString('es-DO')}</td>
       <td style="color:var(--color-text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${entry.notes || '—'}</td>
       <td class="text-center">${statusBadge}</td>
@@ -247,7 +221,7 @@ function buildTableRow(entry) {
     </tr>`;
 }
 
-// ─── Confirm ──────────────────────────────────────────────────────────────────
+// ─── Confirm ──────────────────────────────────────────────────────────────────────────
 
 async function handleConfirm(id) {
   const btn = _container.querySelector(`.dp-confirm-btn[data-id="${id}"]`);
@@ -273,7 +247,7 @@ async function handleConfirm(id) {
   }
 }
 
-// ─── Summary ──────────────────────────────────────────────────────────────────
+// ─── Summary ──────────────────────────────────────────────────────────────────────────
 
 function renderSummary(entries) {
   const total     = entries.reduce((s, e) => s + e.quantity, 0);
@@ -297,7 +271,7 @@ function updateCountBar(count) {
   if (el) el.textContent = `${count} registro${count !== 1 ? 's' : ''}`;
 }
 
-// ─── Feedback ─────────────────────────────────────────────────────────────────
+// ─── Feedback ──────────────────────────────────────────────────────────────────────────
 
 function showFeedback(message, type) {
   const el = _container.querySelector('#dp-feedback');
