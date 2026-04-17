@@ -212,6 +212,9 @@ function renderTable(entries) {
   tbody.querySelectorAll('.dp-edit-btn').forEach(btn => {
     btn.addEventListener('click', () => handleEdit(btn.dataset.id));
   });
+  tbody.querySelectorAll('.dp-delete-btn').forEach(btn => {
+    btn.addEventListener('click', () => handleDelete(btn.dataset.id));
+  });
 }
 
 function buildTableRow(entry) {
@@ -223,12 +226,13 @@ function buildTableRow(entry) {
     ? `<span class="badge badge--green">✓ Confirmado</span>`
     : `<span class="badge badge--warning">⏳ Pendiente</span>`;
 
+  const deleteBtn = `<button class="btn btn--ghost btn--xs dp-delete-btn" data-id="${entry.id}" style="color:var(--color-danger);border-color:var(--color-danger);opacity:.7;" title="Eliminar registro">✕</button>`;
+
   const actionBtn = entry.status === 'pending_review'
-    ? `<div style="display:flex;gap:.375rem;justify-content:center;">
-         <button class="btn btn--ghost btn--xs dp-edit-btn" data-id="${entry.id}">Editar</button>
-         <button class="btn btn--primary btn--xs dp-confirm-btn" data-id="${entry.id}">Confirmar</button>
-       </div>`
-    : `<span style="color:var(--color-text-muted);font-size:.8rem;">—</span>`;
+    ? `<button class="btn btn--ghost btn--xs dp-edit-btn" data-id="${entry.id}">Editar</button>
+       <button class="btn btn--primary btn--xs dp-confirm-btn" data-id="${entry.id}">Confirmar</button>
+       ${deleteBtn}`
+    : deleteBtn;
 
   return `
     <tr class="table-row" data-entry-id="${entry.id}">
@@ -239,7 +243,7 @@ function buildTableRow(entry) {
       <td class="text-right" style="font-family:var(--font-mono);font-weight:600;">${entry.quantity.toLocaleString('es-DO')}</td>
       <td style="color:var(--color-text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${entry.notes || '—'}</td>
       <td class="text-center">${statusBadge}</td>
-      <td class="text-center td-actions">${actionBtn}</td>
+      <td class="text-center td-actions" style="display:flex;align-items:center;justify-content:center;gap:.375rem;">${actionBtn}</td>
     </tr>`;
 }
 
@@ -471,6 +475,57 @@ async function handleConfirm(id) {
       errEl.textContent = err.message;
       errEl.style.display = 'block';
       okBtn.disabled = false; okBtn.textContent = 'Confirmar';
+    }
+  });
+}
+
+// ─── Delete ───────────────────────────────────────────────────────────────────
+
+function handleDelete(id) {
+  const entry = allEntries.find(e => e.id === id);
+  if (!entry) return;
+
+  const date    = new Date(entry.production_date + 'T12:00:00');
+  const dateStr = date.toLocaleDateString('es-DO', { day: '2-digit', month: 'short', year: 'numeric' });
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:flex;align-items:center;justify-content:center;padding:1rem;';
+  overlay.innerHTML = `
+    <div style="background:var(--color-bg-card);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-xl);max-width:420px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.6);">
+      <h3 style="margin:0 0 var(--space-sm);font-size:1rem;font-weight:700;color:var(--color-danger);">Eliminar registro</h3>
+      <p style="margin:0 0 var(--space-md);font-size:.875rem;color:var(--color-text-secondary);">¿Estás seguro de que deseas eliminar este registro? Esta acción no se puede deshacer.</p>
+      <div style="background:var(--color-bg-base);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-md);margin-bottom:var(--space-lg);font-size:.82rem;color:var(--color-text-secondary);display:grid;gap:.25rem;">
+        <div><span style="color:var(--color-text-muted);">Fecha:</span> ${dateStr}</div>
+        <div><span style="color:var(--color-text-muted);">Operario:</span> ${entry.operator_name}</div>
+        <div><span style="color:var(--color-text-muted);">Color:</span> ${entry.color}</div>
+        <div><span style="color:var(--color-text-muted);">Cantidad:</span> ${entry.quantity.toLocaleString('es-DO')}</div>
+      </div>
+      <div style="display:flex;gap:var(--space-sm);justify-content:flex-end;">
+        <button id="dp-delete-cancel" class="btn btn--ghost btn--sm">Cancelar</button>
+        <button id="dp-delete-confirm" class="btn btn--sm" style="background:var(--color-danger);color:#fff;border-color:var(--color-danger);">Eliminar</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#dp-delete-cancel').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+  overlay.querySelector('#dp-delete-confirm').addEventListener('click', async () => {
+    const confirmBtn = overlay.querySelector('#dp-delete-confirm');
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = '...';
+    try {
+      await DailyProductionLogsAPI.remove(id);
+      allEntries = allEntries.filter(e => e.id !== id);
+      overlay.remove();
+      renderTable(allEntries);
+      renderSummary(allEntries);
+      updateCountBar(allEntries.length);
+      showFeedback('Registro eliminado correctamente.', 'success');
+    } catch (err) {
+      overlay.remove();
+      showFeedback('Error al eliminar: ' + err.message, 'error');
     }
   });
 }

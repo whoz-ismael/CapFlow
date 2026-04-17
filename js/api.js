@@ -1955,6 +1955,11 @@ export const DailyProductionLogsAPI = {
     if (error) throw new Error(error.message);
     return data;
   },
+
+  async remove(id) {
+    const { error } = await _sb.from('daily_production_logs').delete().eq('id', id);
+    if (error) throw new Error(error.message);
+  },
 };
 
 // ─── Dispatch Operators ───────────────────────────────────────────────────────
