@@ -267,7 +267,7 @@ function handleEdit(id) {
   modal.id = 'dp-edit-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:1000;';
   modal.innerHTML = `
-    <div style="background:var(--color-surface);border-radius:var(--radius-lg);padding:var(--space-xl);width:min(480px,95vw);box-shadow:var(--shadow-xl);">
+    <div style="background:var(--color-bg-card);border-radius:var(--radius-lg);padding:var(--space-xl);width:min(480px,95vw);box-shadow:0 8px 32px rgba(0,0,0,.6);">
       <h2 style="margin:0 0 var(--space-lg);font-family:var(--font-display);font-size:1.1rem;">Editar registro</h2>
       <div class="form-group">
         <label class="form-label">Fecha</label>
@@ -372,7 +372,7 @@ async function handleConfirm(id) {
   modal.id = 'dp-confirm-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:1000;';
   modal.innerHTML = `
-    <div style="background:var(--color-surface);border-radius:var(--radius-lg);padding:var(--space-xl);width:min(440px,95vw);box-shadow:var(--shadow-xl);">
+    <div style="background:var(--color-bg-card);border-radius:var(--radius-lg);padding:var(--space-xl);width:min(440px,95vw);box-shadow:0 8px 32px rgba(0,0,0,.6);">
       <h2 style="margin:0 0 var(--space-md);font-family:var(--font-display);font-size:1.1rem;">Confirmar registro</h2>
       <p style="font-size:.875rem;color:var(--color-text-secondary);margin:0 0 var(--space-lg);">
         <strong>${entry.operator_name}</strong> &middot; ${entry.color} &middot; ${entry.quantity.toLocaleString('es-DO')} paquetes &middot; ${entry.production_date}
