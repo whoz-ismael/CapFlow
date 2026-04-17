@@ -199,11 +199,11 @@ function buildModuleHTML() {
         <div class="rm-inventory-display" id="rm-inventory-display">
           <!-- Filled by renderMonthlySummary() after inventory data loads -->
           <div class="rm-inventory-row">
-            <span class="rm-inventory-label">Reciclado (cierre)</span>
+            <span class="rm-inventory-label">Tapas usadas (cierre)</span>
             <span class="rm-inventory-value" id="rm-inv-recycled">—</span>
           </div>
           <div class="rm-inventory-row">
-            <span class="rm-inventory-label">Pellet (cierre)</span>
+            <span class="rm-inventory-label">Peletizado (cierre)</span>
             <span class="rm-inventory-value" id="rm-inv-pellet">—</span>
           </div>
         </div>
@@ -277,9 +277,9 @@ function buildModuleHTML() {
               <div class="select-wrapper">
                 <select class="form-input form-select" id="rm-field-type" required>
                   <option value="" disabled selected>Seleccionar tipo…</option>
-                  <option value="recycled">Reciclado</option>
-                  <option value="pellet">Pellet Virgen</option>
-                  <option value="pellet_regular">Pellet</option>
+                  <option value="recycled">Tapas usadas</option>
+                  <option value="pellet">Peletizado virgen</option>
+                  <option value="pellet_regular">Peletizado</option>
                   <option value="colorant">Colorante</option>
                 </select>
               </div>
@@ -802,12 +802,12 @@ function renderMaterialBalance() {
           </div>
           <div class="rm-balance-row rm-balance-row--detail">
             <span class="rm-balance-row__op"></span>
-            <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Reciclado</span>
+            <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Tapas usadas</span>
             <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(openingRecycled)}</span>
           </div>
           <div class="rm-balance-row rm-balance-row--detail">
             <span class="rm-balance-row__op"></span>
-            <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Pellet</span>
+            <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Peletizado</span>
             <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(openingPellet)}</span>
           </div>
 
@@ -818,12 +818,12 @@ function renderMaterialBalance() {
           </div>
           <div class="rm-balance-row rm-balance-row--detail">
             <span class="rm-balance-row__op"></span>
-            <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Reciclado</span>
+            <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Tapas usadas</span>
             <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(purchasedRecycled)}</span>
           </div>
           <div class="rm-balance-row rm-balance-row--detail">
             <span class="rm-balance-row__op"></span>
-            <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Pellet</span>
+            <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Peletizado</span>
             <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(purchasedPellet)}</span>
           </div>
 
@@ -903,12 +903,12 @@ function renderMaterialBalance() {
         </div>
         <div class="rm-balance-row rm-balance-row--detail">
           <span class="rm-balance-row__op"></span>
-          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Reciclado</span>
+          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Tapas usadas</span>
           <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(openingRecycled)}</span>
         </div>
         <div class="rm-balance-row rm-balance-row--detail">
           <span class="rm-balance-row__op"></span>
-          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Pellet</span>
+          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Peletizado</span>
           <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(openingPellet)}</span>
         </div>
 
@@ -919,12 +919,12 @@ function renderMaterialBalance() {
         </div>
         <div class="rm-balance-row rm-balance-row--detail">
           <span class="rm-balance-row__op"></span>
-          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Reciclado</span>
+          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Tapas usadas</span>
           <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(purchasedRecycled)}</span>
         </div>
         <div class="rm-balance-row rm-balance-row--detail">
           <span class="rm-balance-row__op"></span>
-          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Pellet</span>
+          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Peletizado</span>
           <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(purchasedPellet)}</span>
         </div>
 
@@ -935,12 +935,12 @@ function renderMaterialBalance() {
         </div>
         <div class="rm-balance-row rm-balance-row--detail">
           <span class="rm-balance-row__op"></span>
-          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Reciclado</span>
+          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Tapas usadas</span>
           <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(closingRecycled)}</span>
         </div>
         <div class="rm-balance-row rm-balance-row--detail">
           <span class="rm-balance-row__op"></span>
-          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Pellet</span>
+          <span class="rm-balance-row__label rm-balance-row__label--sub">\u21b3 Peletizado</span>
           <span class="rm-balance-row__value rm-balance-row__value--sub">${formatNumber(closingPellet)}</span>
         </div>
 
@@ -1696,10 +1696,10 @@ function ensureInventoryModalInDOM() {
               <span class="form-error" id="rm-inv-error-month"></span>
             </div>
 
-            <!-- Reciclado -->
+            <!-- Tapas usadas -->
             <div class="form-group">
               <label class="form-label" for="rm-inv-field-recycled">
-                Reciclado — cierre (lbs) <span class="required">*</span>
+                Tapas usadas — cierre (lbs) <span class="required">*</span>
               </label>
               <input
                 class="form-input"
@@ -1713,10 +1713,10 @@ function ensureInventoryModalInDOM() {
               <span class="form-error" id="rm-inv-error-recycled"></span>
             </div>
 
-            <!-- Pellet -->
+            <!-- Peletizado -->
             <div class="form-group">
               <label class="form-label" for="rm-inv-field-pellet">
-                Pellet — cierre (lbs) <span class="required">*</span>
+                Peletizado — cierre (lbs) <span class="required">*</span>
               </label>
               <input
                 class="form-input"
