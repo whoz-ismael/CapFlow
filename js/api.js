@@ -807,6 +807,7 @@ export const SalesAPI = {
     if (d.status         !== undefined) u.status         = d.status ?? 'confirmed';
     if (d.notes          !== undefined) u.notes          = (d.notes || '').trim();
     if (d.invoiceNumber  !== undefined) u.invoice_number = (d.invoiceNumber || '').trim();
+    if (d.paymentMethod  !== undefined) u.payment_method = d.paymentMethod;
     if (d.attachments    !== undefined) u.attachments    = d.attachments;
     if (d.lines          !== undefined) u.lines          = d.lines;
     if (d.hasNcf         !== undefined) u.has_ncf        = d.hasNcf;
