@@ -597,9 +597,9 @@ export const MonthlyInventoryAPI = {
  */
 export function getMaterialTypeLabel(type) {
   const labels = {
-    recycled:       'Reciclado',
-    pellet:         'Pellet Virgen',
-    pellet_regular: 'Pellet',
+    recycled:       'Tapas usadas',
+    pellet:         'Peletizado virgen',
+    pellet_regular: 'Peletizado',
     colorant:       'Colorante',
   };
   return labels[type] || type;
@@ -1388,7 +1388,7 @@ export async function ensureRawMaterialInventoryItem(materialType) {
     const existing = await InventoryAPI.getById(mapping.item_id);
     if (existing) return mapping.item_id;
   }
-  const names = { recycled: 'Materia prima reciclada', pellet: 'Materia prima pellet' };
+  const names = { recycled: 'Tapas usadas', pellet: 'Peletizado virgen' };
   const newItem = await InventoryAPI.createItem({
     name: names[materialType] ?? `Materia prima (${materialType})`,
     type: 'raw_material', unit: 'lbs',
@@ -1927,7 +1927,7 @@ export const DailyProductionLogsAPI = {
   async getAll({ status, operatorId, dateFrom, dateTo } = {}) {
     let query = _sb
       .from('daily_production_logs')
-      .select('*, dispatch_operators!operator_id(capflow_operator_id)')
+      .select('*')
       .order('production_date', { ascending: false })
       .order('created_at',      { ascending: false });
 
@@ -1956,15 +1956,9 @@ export const DailyProductionLogsAPI = {
     return data;
   },
 
-  async update(id, fields) {
-    const { data, error } = await _sb
-      .from('daily_production_logs')
-      .update({ ...fields, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select()
-      .single();
+  async remove(id) {
+    const { error } = await _sb.from('daily_production_logs').delete().eq('id', id);
     if (error) throw new Error(error.message);
-    return data;
   },
 };
 
