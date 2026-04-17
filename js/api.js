@@ -1927,7 +1927,7 @@ export const DailyProductionLogsAPI = {
   async getAll({ status, operatorId, dateFrom, dateTo } = {}) {
     let query = _sb
       .from('daily_production_logs')
-      .select('*')
+      .select('*, dispatch_operators!operator_id(capflow_operator_id)')
       .order('production_date', { ascending: false })
       .order('created_at',      { ascending: false });
 
@@ -1949,6 +1949,17 @@ export const DailyProductionLogsAPI = {
         confirmed_at: new Date().toISOString(),
         updated_at:   new Date().toISOString(),
       })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async update(id, fields) {
+    const { data, error } = await _sb
+      .from('daily_production_logs')
+      .update({ ...fields, updated_at: new Date().toISOString() })
       .eq('id', id)
       .select()
       .single();

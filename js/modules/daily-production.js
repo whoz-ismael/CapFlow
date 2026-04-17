@@ -1,21 +1,31 @@
 /**
- * daily-production.js — Tapas Diarias (CapFlow)
+ * daily-production.js — Paquetes Diarios (CapFlow)
  *
- * Muestra los registros de tapas enviados por los operarios de CapDispatch.
- * El admin puede confirmar cada entrada (pending_review → confirmed).
+ * Muestra los registros de paquetes enviados por los operarios de CapDispatch.
+ * El admin puede editar y confirmar cada entrada (pending_review → confirmed).
+ * La confirmación crea un registro de producción que actualiza el inventario.
  */
 
-import { DailyProductionLogsAPI } from '../api.js';
-import { DispatchOperatorsAPI }   from '../api.js';
+import {
+  DailyProductionLogsAPI,
+  DispatchOperatorsAPI,
+  ProductionAPI,
+  MachinesAPI,
+  ProductsAPI,
+  OperatorsAPI,
+} from '../api.js';
 
-// ─── Module state ─────────────────────────────────────────────────────────────────────────
+// ─── Module state ─────────────────────────────────────────────────────────────
 
-let allEntries   = [];
-let allOperators = [];
-let filters      = { status: '', operatorId: '', dateFrom: '', dateTo: '' };
-let _container   = null;
+let allEntries          = [];
+let allOperators        = [];
+let allMachines         = [];
+let allProducts         = [];
+let allCapFlowOperators = [];
+let filters             = { status: '', operatorId: '', dateFrom: '', dateTo: '' };
+let _container          = null;
 
-// ─── Entry point ─────────────────────────────────────────────────────────────────────────
+// ─── Entry point ──────────────────────────────────────────────────────────────
 
 export async function mountDailyProduction(container) {
   _container = container;
@@ -24,7 +34,7 @@ export async function mountDailyProduction(container) {
   await loadData();
 }
 
-// ─── HTML ─────────────────────────────────────────────────────────────────────────────
+// ─── HTML ─────────────────────────────────────────────────────────────────────
 
 function buildModuleHTML() {
   return `
@@ -35,7 +45,7 @@ function buildModuleHTML() {
         <div class="module-header__left">
           <span class="module-header__icon">✦</span>
           <div>
-            <h1 class="module-header__title">Tapas Diarias</h1>
+            <h1 class="module-header__title">Paquetes Diarios</h1>
             <p class="module-header__subtitle">Registros enviados por los operarios — confirma para validar</p>
           </div>
         </div>
@@ -90,7 +100,7 @@ function buildModuleHTML() {
       <!-- Table card -->
       <div class="card">
         <div class="card__header">
-          <h2 class="card__title"><span class="card__title-icon">◈</span> Registros de Tapas</h2>
+          <h2 class="card__title"><span class="card__title-icon">◈</span> Registros de Paquetes</h2>
           <span class="module-header__badge" id="dp-count-bar">— registros</span>
         </div>
         <div class="table-wrapper">
@@ -100,6 +110,7 @@ function buildModuleHTML() {
                 <th>Fecha</th>
                 <th>Operario</th>
                 <th>Producto</th>
+                <th>Turno</th>
                 <th class="text-right">Cantidad</th>
                 <th>Notas</th>
                 <th class="text-center">Estado</th>
@@ -107,7 +118,7 @@ function buildModuleHTML() {
               </tr>
             </thead>
             <tbody id="dp-tbody">
-              <tr><td colspan="7" class="table-empty"><span>Cargando...</span></td></tr>
+              <tr><td colspan="8" class="table-empty"><span>Cargando...</span></td></tr>
             </tbody>
           </table>
         </div>
@@ -117,7 +128,7 @@ function buildModuleHTML() {
   `;
 }
 
-// ─── Event listeners ────────────────────────────────────────────────────────────────────
+// ─── Event listeners ──────────────────────────────────────────────────────────
 
 function attachEventListeners() {
   _container.querySelector('#dp-refresh').addEventListener('click', loadData);
@@ -125,14 +136,17 @@ function attachEventListeners() {
   _container.querySelector('#dp-clear-filters').addEventListener('click', clearFilters);
 }
 
-// ─── Data ─────────────────────────────────────────────────────────────────────────────
+// ─── Data ─────────────────────────────────────────────────────────────────────
 
 async function loadData() {
   try {
     hideFeedback();
-    [allEntries, allOperators] = await Promise.all([
+    [allEntries, allOperators, allMachines, allProducts, allCapFlowOperators] = await Promise.all([
       DailyProductionLogsAPI.getAll(filters),
       DispatchOperatorsAPI.getAll().catch(() => []),
+      MachinesAPI.getAll().catch(() => []),
+      ProductsAPI.getAll().catch(() => []),
+      OperatorsAPI.getAll().catch(() => []),
     ]);
     populateOperatorDropdown();
     renderTable(allEntries);
@@ -157,7 +171,7 @@ function populateOperatorDropdown() {
   });
 }
 
-// ─── Filters ──────────────────────────────────────────────────────────────────────────
+// ─── Filters ──────────────────────────────────────────────────────────────────
 
 async function applyFilters() {
   filters.status     = _container.querySelector('#dp-filter-status').value;
@@ -176,13 +190,13 @@ function clearFilters() {
   loadData();
 }
 
-// ─── Table ────────────────────────────────────────────────────────────────────────────
+// ─── Table ────────────────────────────────────────────────────────────────────
 
 function renderTable(entries) {
   const tbody = _container.querySelector('#dp-tbody');
   if (!entries || entries.length === 0) {
     tbody.innerHTML = `
-      <tr><td colspan="7">
+      <tr><td colspan="8">
         <div class="table-empty">
           <span class="table-empty__icon">✦</span>
           <span>Sin registros</span>
@@ -195,18 +209,25 @@ function renderTable(entries) {
   tbody.querySelectorAll('.dp-confirm-btn').forEach(btn => {
     btn.addEventListener('click', () => handleConfirm(btn.dataset.id));
   });
+  tbody.querySelectorAll('.dp-edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => handleEdit(btn.dataset.id));
+  });
 }
 
 function buildTableRow(entry) {
-  const date = new Date(entry.production_date + 'T12:00:00');
+  const date    = new Date(entry.production_date + 'T12:00:00');
   const dateStr = date.toLocaleDateString('es-DO', { day: '2-digit', month: 'short', year: 'numeric' });
+  const shift   = entry.shift || '—';
 
   const statusBadge = entry.status === 'confirmed'
     ? `<span class="badge badge--green">✓ Confirmado</span>`
     : `<span class="badge badge--warning">⏳ Pendiente</span>`;
 
   const actionBtn = entry.status === 'pending_review'
-    ? `<button class="btn btn--primary btn--xs dp-confirm-btn" data-id="${entry.id}">Confirmar</button>`
+    ? `<div style="display:flex;gap:.375rem;justify-content:center;">
+         <button class="btn btn--ghost btn--xs dp-edit-btn" data-id="${entry.id}">Editar</button>
+         <button class="btn btn--primary btn--xs dp-confirm-btn" data-id="${entry.id}">Confirmar</button>
+       </div>`
     : `<span style="color:var(--color-text-muted);font-size:.8rem;">—</span>`;
 
   return `
@@ -214,6 +235,7 @@ function buildTableRow(entry) {
       <td style="white-space:nowrap;font-family:var(--font-mono);font-size:.82rem;color:var(--color-text-secondary);">${dateStr}</td>
       <td style="font-weight:500;">${entry.operator_name}</td>
       <td>${entry.color}</td>
+      <td style="font-size:.82rem;color:var(--color-text-secondary);">${shift}</td>
       <td class="text-right" style="font-family:var(--font-mono);font-weight:600;">${entry.quantity.toLocaleString('es-DO')}</td>
       <td style="color:var(--color-text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${entry.notes || '—'}</td>
       <td class="text-center">${statusBadge}</td>
@@ -221,49 +243,255 @@ function buildTableRow(entry) {
     </tr>`;
 }
 
-// ─── Confirm ──────────────────────────────────────────────────────────────────────────
+// ─── Edit ─────────────────────────────────────────────────────────────────────
 
-async function handleConfirm(id) {
-  const btn = _container.querySelector(`.dp-confirm-btn[data-id="${id}"]`);
-  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+function handleEdit(id) {
+  const entry = allEntries.find(e => e.id === id);
+  if (!entry) return;
 
-  try {
-    const updated = await DailyProductionLogsAPI.confirm(id);
-    const idx = allEntries.findIndex(e => e.id === id);
-    if (idx !== -1) allEntries[idx] = updated;
+  const machineOptions = allMachines
+    .filter(m => m.isActive !== false)
+    .map(m => `<option value="${m.id}" ${entry.machine_id === m.id ? 'selected' : ''}>${m.name || m.code || m.id}</option>`)
+    .join('');
 
-    const row = _container.querySelector(`tr[data-entry-id="${id}"]`);
-    if (row) {
-      row.outerHTML = buildTableRow(updated);
-      _container.querySelector('#dp-tbody').querySelectorAll('.dp-confirm-btn').forEach(b => {
-        b.addEventListener('click', () => handleConfirm(b.dataset.id));
-      });
+  const productOptions = allProducts
+    .filter(p => p.active !== false)
+    .map(p => `<option value="${p.id}" ${entry.product_id === p.id ? 'selected' : ''}>${p.name}</option>`)
+    .join('');
+
+  const shiftOpts = ['Matutino', 'Vespertino', 'Nocturno']
+    .map(s => `<option value="${s}" ${entry.shift === s ? 'selected' : ''}>${s}</option>`)
+    .join('');
+
+  const modal = document.createElement('div');
+  modal.id = 'dp-edit-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:1000;';
+  modal.innerHTML = `
+    <div style="background:var(--color-surface);border-radius:var(--radius-lg);padding:var(--space-xl);width:min(480px,95vw);box-shadow:var(--shadow-xl);">
+      <h2 style="margin:0 0 var(--space-lg);font-family:var(--font-display);font-size:1.1rem;">Editar registro</h2>
+      <div class="form-group">
+        <label class="form-label">Fecha</label>
+        <input id="dp-edit-date" type="date" class="form-input" value="${entry.production_date}"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Producto</label>
+        <div class="select-wrapper">
+          <select id="dp-edit-product" class="form-input form-select">
+            <option value="">— Sin producto —</option>
+            ${productOptions}
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Turno</label>
+        <div class="select-wrapper">
+          <select id="dp-edit-shift" class="form-input form-select">
+            <option value="">— Sin turno —</option>
+            ${shiftOpts}
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Máquina</label>
+        <div class="select-wrapper">
+          <select id="dp-edit-machine" class="form-input form-select">
+            <option value="">— Sin máquina —</option>
+            ${machineOptions}
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Cantidad</label>
+        <input id="dp-edit-qty" type="number" class="form-input" min="1" value="${entry.quantity}"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Notas</label>
+        <textarea id="dp-edit-notes" class="form-input" rows="2" style="resize:vertical;">${entry.notes || ''}</textarea>
+      </div>
+      <div id="dp-edit-err" style="display:none;color:var(--color-danger);font-size:.875rem;margin-bottom:var(--space-sm);"></div>
+      <div style="display:flex;gap:var(--space-sm);justify-content:flex-end;margin-top:var(--space-lg);">
+        <button id="dp-edit-cancel" class="btn btn--ghost btn--sm">Cancelar</button>
+        <button id="dp-edit-save"   class="btn btn--primary btn--sm">Guardar</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(modal);
+
+  modal.querySelector('#dp-edit-cancel').addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+
+  modal.querySelector('#dp-edit-save').addEventListener('click', async () => {
+    const saveBtn = modal.querySelector('#dp-edit-save');
+    const errEl   = modal.querySelector('#dp-edit-err');
+    const qty     = Number(modal.querySelector('#dp-edit-qty').value);
+
+    if (!qty || qty < 1) {
+      errEl.textContent = 'La cantidad debe ser mayor a 0.';
+      errEl.style.display = 'block';
+      return;
     }
-    renderSummary(allEntries);
-    showFeedback('Registro confirmado correctamente.', 'success');
-  } catch (err) {
-    showFeedback('Error al confirmar: ' + err.message, 'error');
-    if (btn) { btn.disabled = false; btn.textContent = 'Confirmar'; }
-  }
+
+    saveBtn.disabled = true; saveBtn.textContent = 'Guardando...';
+    try {
+      const fields = {
+        production_date: modal.querySelector('#dp-edit-date').value,
+        product_id:      modal.querySelector('#dp-edit-product').value || null,
+        shift:           modal.querySelector('#dp-edit-shift').value   || null,
+        machine_id:      modal.querySelector('#dp-edit-machine').value || null,
+        quantity:        qty,
+        notes:           modal.querySelector('#dp-edit-notes').value.trim(),
+      };
+      await DailyProductionLogsAPI.update(id, fields);
+      modal.remove();
+      await loadData();
+      showFeedback('Registro actualizado correctamente.', 'success');
+    } catch (err) {
+      errEl.textContent = 'Error al guardar: ' + err.message;
+      errEl.style.display = 'block';
+      saveBtn.disabled = false; saveBtn.textContent = 'Guardar';
+    }
+  });
 }
 
-// ─── Summary ──────────────────────────────────────────────────────────────────────────
+// ─── Confirm ──────────────────────────────────────────────────────────────────
+
+async function handleConfirm(id) {
+  const entry = allEntries.find(e => e.id === id);
+  if (!entry) return;
+
+  const capflowOperatorId   = entry.dispatch_operators?.capflow_operator_id ?? null;
+  const needsOperatorSelect = capflowOperatorId === null;
+  const hasRequiredFields   = entry.machine_id && entry.product_id;
+
+  const operatorOptions = allCapFlowOperators
+    .filter(op => op.isActive !== false)
+    .map(op => `<option value="${op.id}">${op.name}</option>`)
+    .join('');
+
+  const modal = document.createElement('div');
+  modal.id = 'dp-confirm-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:1000;';
+  modal.innerHTML = `
+    <div style="background:var(--color-surface);border-radius:var(--radius-lg);padding:var(--space-xl);width:min(440px,95vw);box-shadow:var(--shadow-xl);">
+      <h2 style="margin:0 0 var(--space-md);font-family:var(--font-display);font-size:1.1rem;">Confirmar registro</h2>
+      <p style="font-size:.875rem;color:var(--color-text-secondary);margin:0 0 var(--space-lg);">
+        <strong>${entry.operator_name}</strong> &middot; ${entry.color} &middot; ${entry.quantity.toLocaleString('es-DO')} paquetes &middot; ${entry.production_date}
+      </p>
+      ${!hasRequiredFields ? `
+        <div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.4);border-radius:var(--radius-md);padding:.75rem 1rem;font-size:.82rem;color:#d97706;margin-bottom:var(--space-md);">
+          ⚠️ Este registro fue creado antes de la actualización y no puede generar un registro de producción automáticamente. Se confirmará el estado solamente.
+        </div>` : ''}
+      ${hasRequiredFields ? `
+        <div class="form-group">
+          <label class="form-label">Tarifa del operador (RD$/paquete) <span style="color:var(--color-danger);">*</span></label>
+          <input id="dp-confirm-rate" type="number" class="form-input" min="0.01" step="0.01" placeholder="Ej: 0.50"/>
+        </div>` : ''}
+      ${hasRequiredFields && needsOperatorSelect ? `
+        <div class="form-group">
+          <label class="form-label">Operario CapFlow <span style="color:var(--color-danger);">*</span></label>
+          <div class="select-wrapper">
+            <select id="dp-confirm-operator" class="form-input form-select">
+              <option value="">— Selecciona un operario —</option>
+              ${operatorOptions}
+            </select>
+          </div>
+          <p style="font-size:.75rem;color:var(--color-text-muted);margin:.25rem 0 0;">El operario de despacho no está vinculado a un operario de CapFlow.</p>
+        </div>` : ''}
+      <div id="dp-confirm-err" style="display:none;color:var(--color-danger);font-size:.875rem;margin-bottom:var(--space-sm);"></div>
+      <div style="display:flex;gap:var(--space-sm);justify-content:flex-end;margin-top:var(--space-lg);">
+        <button id="dp-confirm-cancel" class="btn btn--ghost btn--sm">Cancelar</button>
+        <button id="dp-confirm-ok"     class="btn btn--primary btn--sm">Confirmar</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(modal);
+
+  modal.querySelector('#dp-confirm-cancel').addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+
+  modal.querySelector('#dp-confirm-ok').addEventListener('click', async () => {
+    const okBtn = modal.querySelector('#dp-confirm-ok');
+    const errEl = modal.querySelector('#dp-confirm-err');
+
+    let operatorRateSnapshot = null;
+    let resolvedOperatorId   = capflowOperatorId;
+
+    if (hasRequiredFields) {
+      const rateInput = modal.querySelector('#dp-confirm-rate');
+      operatorRateSnapshot = rateInput ? Number(rateInput.value) : null;
+      if (!operatorRateSnapshot || operatorRateSnapshot <= 0) {
+        errEl.textContent = 'Ingresa una tarifa válida mayor a 0.';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      if (needsOperatorSelect) {
+        const opSel = modal.querySelector('#dp-confirm-operator');
+        resolvedOperatorId = opSel ? opSel.value : null;
+        if (!resolvedOperatorId) {
+          errEl.textContent = 'Selecciona un operario de CapFlow.';
+          errEl.style.display = 'block';
+          return;
+        }
+      }
+    }
+
+    okBtn.disabled = true; okBtn.textContent = 'Confirmando...';
+
+    try {
+      // Step 1: Confirm the log record
+      const confirmed = await DailyProductionLogsAPI.confirm(id);
+
+      // Step 2: Create production record (only if entry has required fields)
+      if (hasRequiredFields) {
+        try {
+          await ProductionAPI.create({
+            productId:                entry.product_id,
+            machineId:                entry.machine_id,
+            operatorId:               resolvedOperatorId,
+            shift:                    entry.shift,
+            quantity:                 entry.quantity,
+            productionDate:           entry.production_date,
+            operatorRateSnapshot:     operatorRateSnapshot,
+            weightPerPackageSnapshot: 0,
+          });
+        } catch (prodErr) {
+          // Revert confirmation so admin can try again
+          await DailyProductionLogsAPI.update(id, { status: 'pending_review', confirmed_at: null });
+          throw new Error('Error al crear registro de producción: ' + prodErr.message);
+        }
+      }
+
+      const idx = allEntries.findIndex(e => e.id === id);
+      if (idx !== -1) allEntries[idx] = confirmed;
+      modal.remove();
+      await loadData();
+      showFeedback('Registro confirmado correctamente.', 'success');
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.style.display = 'block';
+      okBtn.disabled = false; okBtn.textContent = 'Confirmar';
+    }
+  });
+}
+
+// ─── Summary ──────────────────────────────────────────────────────────────────
 
 function renderSummary(entries) {
   const total     = entries.reduce((s, e) => s + e.quantity, 0);
   const confirmed = entries.filter(e => e.status === 'confirmed').reduce((s, e) => s + e.quantity, 0);
   const pending   = entries.filter(e => e.status === 'pending_review').reduce((s, e) => s + e.quantity, 0);
 
-  const card = (label, value, badgeClass) => `
+  const card = (label, value) => `
     <div class="card" style="padding:var(--space-md) var(--space-lg);">
       <p style="font-family:var(--font-display);font-size:.7rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--color-text-muted);margin:0 0 .375rem;">${label}</p>
       <p style="font-family:var(--font-mono);font-size:1.75rem;font-weight:700;color:var(--color-text-primary);margin:0;">${value.toLocaleString('es-DO')}</p>
     </div>`;
 
   _container.querySelector('#dp-summary').innerHTML =
-    card('Total tapas',   total,     '') +
-    card('Confirmadas',   confirmed, 'badge--green') +
-    card('Pendientes',    pending,   'badge--warning');
+    card('Total paquetes', total) +
+    card('Confirmados',    confirmed) +
+    card('Pendientes',     pending);
 }
 
 function updateCountBar(count) {
@@ -271,7 +499,7 @@ function updateCountBar(count) {
   if (el) el.textContent = `${count} registro${count !== 1 ? 's' : ''}`;
 }
 
-// ─── Feedback ──────────────────────────────────────────────────────────────────────────
+// ─── Feedback ─────────────────────────────────────────────────────────────────
 
 function showFeedback(message, type) {
   const el = _container.querySelector('#dp-feedback');
