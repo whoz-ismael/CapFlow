@@ -138,6 +138,11 @@ function _buildSaleCard(sale) {
           <span class="ps-card__invoice">${_esc(invoice)}</span>
         </div>
         <div class="ps-card__actions">
+          <button class="btn btn--sm btn--ghost ps-edit-btn"
+            data-sale-id="${_esc(sale.id)}"
+            title="Editar venta antes de confirmar">
+            ✎ Editar
+          </button>
           <button class="btn btn--sm btn--success ps-confirm-btn"
             data-sale-id="${_esc(sale.id)}"
             title="Confirmar y procesar venta">
@@ -191,11 +196,165 @@ function _attachTopListeners() {
 }
 
 function _attachCardListeners() {
+  document.querySelectorAll('.ps-edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => _handleEdit(btn.dataset.saleId));
+  });
   document.querySelectorAll('.ps-confirm-btn').forEach(btn => {
     btn.addEventListener('click', () => _handleConfirm(btn.dataset.saleId));
   });
   document.querySelectorAll('.ps-reject-btn').forEach(btn => {
     btn.addEventListener('click', () => _handleReject(btn.dataset.saleId));
+  });
+}
+
+// ─── EDITAR VENTA ────────────────────────────────────────────────────────────
+
+function _handleEdit(saleId) {
+  const sale = _pendingSales.find(s => s.id === saleId);
+  if (!sale) return;
+
+  const customerOptions = [..._customerMap.values()]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(c => `<option value="${_esc(c.id)}" ${sale.clientId === c.id ? 'selected' : ''}>${_esc(c.name)}</option>`)
+    .join('');
+
+  const methodOptions = [
+    { value: 'cash',         label: 'Efectivo' },
+    { value: 'transfer',     label: 'Transferencia' },
+    { value: 'efectivo',     label: 'Efectivo' },
+    { value: 'transferencia',label: 'Transferencia' },
+    { value: 'cheque',       label: 'Cheque' },
+    { value: 'otro',         label: 'Otro' },
+  ].filter((m, i, arr) => arr.findIndex(x => x.label === m.label) === i)
+   .map(m => `<option value="${m.value}" ${sale.paymentMethod === m.value ? 'selected' : ''}>${m.label}</option>`)
+   .join('');
+
+  const linesHTML = (sale.lines || []).map((line, i) => {
+    const prod  = _productMap.get(line.productId);
+    const name  = prod?.name ?? line.productId ?? 'Producto';
+    const price = Number(line.unitPrice || line.salePricePerUnit || 0);
+    return `
+      <div class="ps-edit-line" style="display:grid;grid-template-columns:1fr 80px 120px;align-items:center;gap:var(--space-sm);padding:var(--space-xs) 0;border-bottom:1px solid var(--color-border);">
+        <span style="font-size:.88rem;">${_esc(name)}</span>
+        <span style="font-size:.82rem;color:var(--color-text-muted);text-align:right;">${Number(line.quantity || 0)} paq.</span>
+        <input type="number" class="form-input ps-line-price" data-line-index="${i}"
+          value="${price}" min="0" step="0.01"
+          style="text-align:right;font-family:var(--font-mono);font-size:.88rem;padding:.3rem .5rem;"/>
+      </div>`;
+  }).join('');
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:flex;align-items:center;justify-content:center;padding:1rem;overflow-y:auto;';
+  overlay.innerHTML = `
+    <div style="background:var(--color-bg-card);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-xl);width:min(520px,100%);box-shadow:0 8px 32px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:var(--space-md);">
+      <h3 style="margin:0;font-size:1rem;font-weight:700;color:var(--color-text-primary);">Editar venta — ${_esc(sale.invoiceNumber || saleId)}</h3>
+
+      <div class="form-group">
+        <label class="form-label">Cliente</label>
+        <div class="select-wrapper">
+          <select id="pse-client" class="form-input form-select">
+            <option value="">— Sin cliente —</option>
+            ${customerOptions}
+          </select>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-md);">
+        <div class="form-group">
+          <label class="form-label">Fecha de venta</label>
+          <input id="pse-date" type="date" class="form-input" value="${_esc(sale.saleDate || '')}"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Método de pago</label>
+          <div class="select-wrapper">
+            <select id="pse-method" class="form-input form-select">${methodOptions}</select>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Número de factura</label>
+        <input id="pse-invoice" type="text" class="form-input" value="${_esc(sale.invoiceNumber || '')}"/>
+      </div>
+
+      ${linesHTML ? `
+      <div>
+        <p class="form-label" style="margin-bottom:var(--space-xs);">Precio por paquete (RD$)</p>
+        ${linesHTML}
+        <div style="text-align:right;font-weight:600;font-size:.95rem;padding-top:var(--space-sm);">
+          Total: <span id="pse-total" style="font-family:var(--font-mono);">${_fmt(sale.totals?.revenue ?? 0)}</span>
+        </div>
+      </div>` : ''}
+
+      <div class="form-group">
+        <label class="form-label">Notas</label>
+        <textarea id="pse-notes" class="form-input" rows="2" style="resize:vertical;">${_esc(sale.notes || '')}</textarea>
+      </div>
+
+      <div id="pse-err" style="display:none;color:var(--color-danger);font-size:.875rem;"></div>
+
+      <div style="display:flex;gap:var(--space-sm);justify-content:flex-end;">
+        <button id="pse-cancel" class="btn btn--ghost btn--sm">Cancelar</button>
+        <button id="pse-save"   class="btn btn--primary btn--sm">Guardar cambios</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  // Recalculate total on price input change
+  overlay.querySelectorAll('.ps-line-price').forEach(input => {
+    input.addEventListener('input', () => {
+      let revenue = 0;
+      overlay.querySelectorAll('.ps-line-price').forEach((inp, i) => {
+        revenue += Number(inp.value || 0) * Number(sale.lines[i]?.quantity || 0);
+      });
+      const totalEl = overlay.querySelector('#pse-total');
+      if (totalEl) totalEl.textContent = _fmt(revenue);
+    });
+  });
+
+  overlay.querySelector('#pse-cancel').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+  overlay.querySelector('#pse-save').addEventListener('click', async () => {
+    const saveBtn = overlay.querySelector('#pse-save');
+    const errEl   = overlay.querySelector('#pse-err');
+    errEl.style.display = 'none';
+
+    // Build updated lines with new prices
+    const updatedLines = (sale.lines || []).map((line, i) => {
+      const priceInput = overlay.querySelector(`.ps-line-price[data-line-index="${i}"]`);
+      const newPrice   = priceInput ? Number(priceInput.value) : Number(line.unitPrice || line.salePricePerUnit || 0);
+      return { ...line, unitPrice: newPrice, salePricePerUnit: newPrice, lineRevenue: newPrice * Number(line.quantity || 0) };
+    });
+
+    const newRevenue = updatedLines.reduce((s, l) => s + l.lineRevenue, 0);
+    const oldCost    = sale.totals?.cost ?? 0;
+    const newProfit  = newRevenue - oldCost;
+    const newMargin  = newRevenue > 0 ? (newProfit / newRevenue * 100) : 0;
+
+    saveBtn.disabled = true; saveBtn.textContent = 'Guardando...';
+    try {
+      const updated = await SalesAPI.update(saleId, {
+        clientId:      overlay.querySelector('#pse-client').value  || sale.clientId,
+        saleDate:      overlay.querySelector('#pse-date').value    || sale.saleDate,
+        invoiceNumber: overlay.querySelector('#pse-invoice').value,
+        paymentMethod: overlay.querySelector('#pse-method').value,
+        notes:         overlay.querySelector('#pse-notes').value,
+        lines:         updatedLines,
+        totals:        { ...sale.totals, revenue: newRevenue, profit: newProfit, margin: newMargin },
+      });
+
+      const idx = _pendingSales.findIndex(s => s.id === saleId);
+      if (idx !== -1) _pendingSales[idx] = updated;
+      overlay.remove();
+      _renderList();
+      _showBanner('Venta actualizada correctamente.', 'success');
+    } catch (err) {
+      errEl.textContent = 'Error al guardar: ' + err.message;
+      errEl.style.display = 'block';
+      saveBtn.disabled = false; saveBtn.textContent = 'Guardar cambios';
+    }
   });
 }
 
