@@ -226,13 +226,11 @@ function buildTableRow(entry) {
     ? `<span class="badge badge--green">✓ Confirmado</span>`
     : `<span class="badge badge--warning">⏳ Pendiente</span>`;
 
-  const deleteBtn = `<button class="btn btn--ghost btn--xs dp-delete-btn" data-id="${entry.id}" style="color:var(--color-danger);border-color:var(--color-danger);opacity:.7;" title="Eliminar registro">✕</button>`;
-
   const actionBtn = entry.status === 'pending_review'
     ? `<button class="btn btn--ghost btn--xs dp-edit-btn" data-id="${entry.id}">Editar</button>
        <button class="btn btn--primary btn--xs dp-confirm-btn" data-id="${entry.id}">Confirmar</button>
-       ${deleteBtn}`
-    : deleteBtn;
+       <button class="btn btn--ghost btn--xs dp-delete-btn" data-id="${entry.id}" style="color:var(--color-danger);border-color:var(--color-danger);opacity:.7;" title="Eliminar registro">✕</button>`
+    : `<span style="color:var(--color-text-muted);font-size:.8rem;">—</span>`;
 
   return `
     <tr class="table-row" data-entry-id="${entry.id}">
