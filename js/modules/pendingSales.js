@@ -224,6 +224,7 @@ function _handleEdit(saleId) {
     { value: 'efectivo',     label: 'Efectivo' },
     { value: 'transferencia',label: 'Transferencia' },
     { value: 'cheque',       label: 'Cheque' },
+    { value: 'credito',      label: 'Crédito' },
     { value: 'otro',         label: 'Otro' },
   ].filter((m, i, arr) => arr.findIndex(x => x.label === m.label) === i)
    .map(m => `<option value="${m.value}" ${sale.paymentMethod === m.value ? 'selected' : ''}>${m.label}</option>`)
@@ -393,15 +394,17 @@ async function _handleConfirm(saleId) {
       }
     }
 
-    // 3. Registrar pago
-    const paymentMethod = _mapPaymentMethod(sale.paymentMethod);
-    await SalePaymentsAPI.create({
-      saleId,
-      paymentDate: sale.saleDate || new Date().toISOString().slice(0, 10),
-      amount:      sale.totals?.revenue ?? 0,
-      method:      paymentMethod,
-      notes:       `Pago registrado al confirmar despacho — ${sale.invoiceNumber || ''}`,
-    });
+    // 3. Registrar pago (el inversionista nunca paga al momento — queda como cuenta por cobrar)
+    if (!sale.isInvestor) {
+      const paymentMethod = _mapPaymentMethod(sale.paymentMethod);
+      await SalePaymentsAPI.create({
+        saleId,
+        paymentDate: sale.saleDate || new Date().toISOString().slice(0, 10),
+        amount:      sale.totals?.revenue ?? 0,
+        method:      paymentMethod,
+        notes:       `Pago registrado al confirmar despacho — ${sale.invoiceNumber || ''}`,
+      });
+    }
 
     // 4. Actualizar inversionista si aplica
     if (sale.isInvestor && _investorRecord) {
@@ -584,7 +587,7 @@ function _fmtDatetime(isoOrMs) {
 
 function _fmtMethod(method) {
   const map = { cash: 'Efectivo', transfer: 'Transferencia', efectivo: 'Efectivo',
-    transferencia: 'Transferencia', cheque: 'Cheque' };
+    transferencia: 'Transferencia', cheque: 'Cheque', credito: 'Crédito' };
   return map[method] ?? (method || '—');
 }
 

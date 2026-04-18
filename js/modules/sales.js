@@ -58,6 +58,7 @@ const PAYMENT_METHODS = [
   { value: 'efectivo',      label: 'Efectivo' },
   { value: 'transferencia', label: 'Transferencia' },
   { value: 'cheque',        label: 'Cheque' },
+  { value: 'credito',       label: 'Crédito' },
   { value: 'otro',          label: 'Otro' },
 ];
 
