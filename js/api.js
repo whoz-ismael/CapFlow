@@ -1098,21 +1098,21 @@ export const InvestorAPI = {
     return record;
   },
 
-  async addInvestment(amount, note = '', referenceId = null) {
+  async addInvestment(amount, note = '', referenceId = null, date = null) {
     const record = await _investorRead();
     if (!record) throw new Error('No existe un registro de inversionista.');
     const amt = Number(amount);
     if (!amt || amt <= 0) throw new Error('El monto de inversión debe ser mayor que cero.');
     record.history.push({
       id: _genId('inv'), type: 'investment', amount: amt,
-      date: Date.now(), referenceId: referenceId ?? null, note: (note || '').trim(),
+      date: date ?? Date.now(), referenceId: referenceId ?? null, note: (note || '').trim(),
     });
     record.totalDebt += amt;
     await _investorWrite(record);
     return record;
   },
 
-  async addAmortization(amount, referenceId = null, note = '') {
+  async addAmortization(amount, referenceId = null, note = '', date = null) {
     const record = await _investorRead();
     if (!record) throw new Error('No existe un registro de inversionista.');
     const amt = Number(amount);
@@ -1122,7 +1122,7 @@ export const InvestorAPI = {
     );
     record.history.push({
       id: _genId('inv'), type: 'amortization', amount: amt,
-      date: Date.now(), referenceId: referenceId ?? null, note: (note || '').trim(),
+      date: date ?? Date.now(), referenceId: referenceId ?? null, note: (note || '').trim(),
     });
     record.totalDebt -= amt;
     await _investorWrite(record);
