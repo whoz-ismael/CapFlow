@@ -150,6 +150,10 @@ function buildShellHTML() {
                   <span class="form-error" id="inv-invest-error"></span>
                 </div>
                 <div class="form-group form-group--wide">
+                  <label class="form-label" for="inv-invest-date">Fecha <span class="required">*</span></label>
+                  <input class="form-input" type="date" id="inv-invest-date">
+                </div>
+                <div class="form-group form-group--wide">
                   <label class="form-label" for="inv-invest-note">Nota (opcional)</label>
                   <input class="form-input" type="text" id="inv-invest-note"
                     placeholder="Ej: Transferencia enero 2026" maxlength="120">
@@ -179,6 +183,10 @@ function buildShellHTML() {
                   <input class="form-input" type="number" id="inv-amort-amount"
                     min="0.01" step="0.01" placeholder="0.00">
                   <span class="form-error" id="inv-amort-error"></span>
+                </div>
+                <div class="form-group form-group--wide">
+                  <label class="form-label" for="inv-amort-date">Fecha <span class="required">*</span></label>
+                  <input class="form-input" type="date" id="inv-amort-date">
                 </div>
                 <div class="form-group form-group--wide">
                   <label class="form-label" for="inv-amort-note">Nota (opcional)</label>
@@ -292,6 +300,13 @@ function render() {
 
   content.style.display   = 'block';
   setupCard.style.display = 'none';
+
+  const today = todayISO();
+  const investDate = document.getElementById('inv-invest-date');
+  const amortDate  = document.getElementById('inv-amort-date');
+  if (investDate && !investDate.value) investDate.value = today;
+  if (amortDate  && !amortDate.value)  amortDate.value  = today;
+
   fillSummary();
   fillHistory();
 }
@@ -410,21 +425,28 @@ async function handleSetupSubmit(e) {
 
 async function handleInvestmentSubmit(e) {
   e.preventDefault();
-  const amount = parseFloat(document.getElementById('inv-invest-amount').value);
-  const note   = document.getElementById('inv-invest-note').value.trim();
-  const errEl  = document.getElementById('inv-invest-error');
+  const amount  = parseFloat(document.getElementById('inv-invest-amount').value);
+  const dateVal = document.getElementById('inv-invest-date').value;
+  const note    = document.getElementById('inv-invest-note').value.trim();
+  const errEl   = document.getElementById('inv-invest-error');
   errEl.textContent = '';
 
   if (!amount || amount <= 0) {
     errEl.textContent = 'El monto debe ser mayor que cero.';
     return;
   }
+  if (!dateVal) {
+    errEl.textContent = 'Selecciona una fecha.';
+    return;
+  }
 
+  const dateTs = new Date(dateVal + 'T12:00:00').getTime();
   const btn = document.getElementById('inv-invest-submit-btn');
   setButtonLoading(btn, true);
   try {
-    investorRecord = await InvestorAPI.addInvestment(amount, note);
+    investorRecord = await InvestorAPI.addInvestment(amount, note, null, dateTs);
     document.getElementById('inv-investment-form').reset();
+    document.getElementById('inv-invest-date').value = todayISO();
     showFeedback(`Inversión de ${formatCurrency(amount)} registrada.`, 'success');
     fillSummary();
     fillHistory();
@@ -437,13 +459,18 @@ async function handleInvestmentSubmit(e) {
 
 async function handleAmortizationSubmit(e) {
   e.preventDefault();
-  const amount = parseFloat(document.getElementById('inv-amort-amount').value);
-  const note   = document.getElementById('inv-amort-note').value.trim();
-  const errEl  = document.getElementById('inv-amort-error');
+  const amount  = parseFloat(document.getElementById('inv-amort-amount').value);
+  const dateVal = document.getElementById('inv-amort-date').value;
+  const note    = document.getElementById('inv-amort-note').value.trim();
+  const errEl   = document.getElementById('inv-amort-error');
   errEl.textContent = '';
 
   if (!amount || amount <= 0) {
     errEl.textContent = 'El monto debe ser mayor que cero.';
+    return;
+  }
+  if (!dateVal) {
+    errEl.textContent = 'Selecciona una fecha.';
     return;
   }
   if (investorRecord && amount > investorRecord.totalDebt) {
@@ -451,12 +478,13 @@ async function handleAmortizationSubmit(e) {
     return;
   }
 
+  const dateTs = new Date(dateVal + 'T12:00:00').getTime();
   const btn = document.getElementById('inv-amort-submit-btn');
   setButtonLoading(btn, true);
   try {
-    // null referenceId = manual entry. Sales will pass saleId here in the future.
-    investorRecord = await InvestorAPI.addAmortization(amount, null, note);
+    investorRecord = await InvestorAPI.addAmortization(amount, null, note, dateTs);
     document.getElementById('inv-amortization-form').reset();
+    document.getElementById('inv-amort-date').value = todayISO();
     showFeedback(`Amortización de ${formatCurrency(amount)} registrada.`, 'success');
     fillSummary();
     fillHistory();
@@ -556,6 +584,10 @@ function escapeHTML(str) {
   const div = document.createElement('div');
   div.textContent = String(str ?? '');
   return div.innerHTML;
+}
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 // ─── Scoped Styles ────────────────────────────────────────────────────────────
