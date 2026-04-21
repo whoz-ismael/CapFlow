@@ -404,6 +404,36 @@ form {
   font-style: italic;
 }
 
+/* Textarea — shares form-input base styles */
+.form-textarea {
+  resize:     vertical;
+  min-height: 80px;
+  line-height: 1.5;
+  font-family: var(--font-body);
+}
+
+/* Machine code chip — monospace, subtle accent */
+.machine-code {
+  font-family:    var(--font-mono);
+  font-size:      0.78rem;
+  font-weight:    600;
+  color:          var(--color-accent);
+  background:     var(--color-accent-glow);
+  border:         1px solid var(--color-accent-border);
+  border-radius:  var(--radius-sm);
+  padding:        2px 8px;
+  letter-spacing: 0.06em;
+  white-space:    nowrap;
+}
+
+/* Notes column — muted, smaller, wraps gracefully */
+.td-notes {
+  font-size:  0.82rem;
+  color:      var(--color-text-muted);
+  max-width:  240px;
+  line-height: 1.4;
+}
+
 .form-error {
   font-size:  0.75rem;
   color:      var(--color-danger);
@@ -475,6 +505,29 @@ form {
   border-color: var(--color-danger);
 }
 
+/* Danger solid — used for destructive actions like Delete */
+.btn--danger {
+  background:   var(--color-danger);
+  color:        #fff;
+  border-color: var(--color-danger);
+}
+.btn--danger:hover:not(:disabled) {
+  background:   #c0392b;
+  border-color: #c0392b;
+  box-shadow:   0 0 10px var(--color-danger-dim);
+}
+
+/* Warning ghost — used for Deactivate (caution, not destructive) */
+.btn--warning-ghost {
+  background:   transparent;
+  color:        var(--color-warning);
+  border-color: rgba(243, 156, 18, 0.3);
+}
+.btn--warning-ghost:hover:not(:disabled) {
+  background:   rgba(243, 156, 18, 0.1);
+  border-color: var(--color-warning);
+}
+
 /* Success ghost */
 .btn--success-ghost {
   background:   transparent;
@@ -506,11 +559,14 @@ form {
   white-space:    nowrap;
 }
 
-.badge--blue  { background: rgba(74,158,255,0.15);  color: var(--color-accent); border: 1px solid rgba(74,158,255,0.3);  }
-.badge--teal  { background: var(--color-teal-dim);   color: var(--color-teal);   border: 1px solid rgba(26,188,156,0.3);  }
-.badge--green { background: var(--color-success-dim); color: var(--color-success); border: 1px solid rgba(46,204,113,0.3); }
-.badge--gray  { background: rgba(74,85,107,0.2);     color: var(--color-text-muted); border: 1px solid rgba(74,85,107,0.3); }
-.badge--red   { background: var(--color-danger-dim); color: var(--color-danger);  border: 1px solid rgba(231,76,60,0.3);   }
+.badge--blue   { background: rgba(74,158,255,0.15);  color: var(--color-accent);       border: 1px solid rgba(74,158,255,0.3);   }
+.badge--teal   { background: var(--color-teal-dim);   color: var(--color-teal);        border: 1px solid rgba(26,188,156,0.3);   }
+.badge--green  { background: var(--color-success-dim); color: var(--color-success);    border: 1px solid rgba(46,204,113,0.3);   }
+.badge--gray   { background: rgba(74,85,107,0.2);     color: var(--color-text-muted);  border: 1px solid rgba(74,85,107,0.3);   }
+.badge--red    { background: var(--color-danger-dim); color: var(--color-danger);       border: 1px solid rgba(231,76,60,0.3);   }
+.badge--indigo { background: rgba(99,102,241,0.15);   color: #818cf8;                  border: 1px solid rgba(99,102,241,0.3);  }
+.badge--purple { background: rgba(168,85,247,0.15);   color: #c084fc;                  border: 1px solid rgba(168,85,247,0.3);  }
+.badge--warning{ background: rgba(245,158,11,0.15);   color: #fbbf24;                  border: 1px solid rgba(245,158,11,0.3);  }
 
 /* ── Table ───────────────────────────────────────────────────── */
 .table-controls {
@@ -624,36 +680,152 @@ form {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ── Feedback Banner ─────────────────────────────────────────── */
-.feedback-banner {
+/* ── Toast Notification System ───────────────────────────────── */
+
+/* Fixed top-right stack. Toasts slide in from right, stack vertically. */
+#toast-container {
+  position:       fixed;
+  top:            var(--space-lg);
+  right:          var(--space-lg);
+  z-index:        9999;
+  display:        flex;
+  flex-direction: column;
+  gap:            var(--space-sm);
+  pointer-events: none;
+  max-width:      360px;
+  width:          calc(100vw - var(--space-lg) * 2);
+}
+
+.toast {
+  display:        flex;
+  align-items:    flex-start;
+  gap:            10px;
+  padding:        12px 16px;
   border-radius:  var(--radius-md);
-  padding:        10px 16px;
+  border:         1px solid transparent;
   font-size:      0.875rem;
   font-weight:    500;
-  opacity:        0;
-  transform:      translateY(-6px);
-  transition:     opacity var(--transition-md), transform var(--transition-md);
-  pointer-events: none;
-  border:         1px solid transparent;
-}
-
-.feedback-banner--visible {
-  opacity:   1;
-  transform: translateY(0);
+  line-height:    1.45;
   pointer-events: auto;
+  box-shadow:     0 4px 20px rgba(0,0,0,0.5), 0 1px 4px rgba(0,0,0,0.3);
+  cursor:         pointer;
+  animation:      toast-in var(--transition-md) ease forwards;
 }
 
-.feedback-banner--success {
-  background:   var(--color-success-dim);
+.toast--exiting {
+  animation: toast-out 200ms ease forwards;
+}
+
+.toast__icon    { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+.toast__message { flex: 1; }
+.toast__close   {
+  font-size: 1rem; color: inherit; opacity: 0.55; flex-shrink: 0;
+  line-height: 1; margin-top: 1px; transition: opacity var(--transition-fast);
+}
+.toast:hover .toast__close { opacity: 1; }
+
+.toast--success {
+  background:   rgba(22, 27, 37, 0.97);
   color:        var(--color-success);
-  border-color: rgba(46, 204, 113, 0.4);
+  border-color: rgba(46, 204, 113, 0.3);
+  border-left:  3px solid var(--color-success);
+}
+.toast--error {
+  background:   rgba(22, 27, 37, 0.97);
+  color:        var(--color-danger);
+  border-color: rgba(231, 76, 60, 0.3);
+  border-left:  3px solid var(--color-danger);
+}
+.toast--warning {
+  background:   rgba(22, 27, 37, 0.97);
+  color:        var(--color-warning);
+  border-color: rgba(243, 156, 18, 0.3);
+  border-left:  3px solid var(--color-warning);
+}
+.toast--info {
+  background:   rgba(22, 27, 37, 0.97);
+  color:        var(--color-accent);
+  border-color: rgba(74, 158, 255, 0.3);
+  border-left:  3px solid var(--color-accent);
 }
 
-.feedback-banner--error {
-  background:   var(--color-danger-dim);
-  color:        var(--color-danger);
-  border-color: rgba(231, 76, 60, 0.4);
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(28px); }
+  to   { opacity: 1; transform: translateX(0);    }
 }
+@keyframes toast-out {
+  from { opacity: 1; transform: translateX(0);    max-height: 80px;  }
+  to   { opacity: 0; transform: translateX(28px); max-height: 0; padding: 0; border-width: 0; }
+}
+
+/* Legacy feedback-banner — hidden now that toast system is active */
+.feedback-banner { display: none; }
+
+/* ── Production Module ───────────────────────────────────────── */
+
+/* Filter bar — 4-column grid that collapses on smaller screens */
+.production-filters {
+  display:               grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap:                   var(--space-md) var(--space-lg);
+  padding:               var(--space-md) var(--space-lg) var(--space-lg);
+  align-items:           start;
+}
+
+/* Snapshot read-only panel shown in edit mode */
+.snapshot-panel {
+  background:    var(--color-bg-input);
+  border:        1px solid var(--color-accent-border);
+  border-left:   3px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  padding:       var(--space-md);
+  display:       flex;
+  flex-direction: column;
+  gap:           var(--space-xs);
+}
+
+.snapshot-panel__label {
+  font-family:    var(--font-display);
+  font-size:      0.75rem;
+  font-weight:    700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color:          var(--color-accent);
+}
+
+.snapshot-panel__values {
+  display:   flex;
+  gap:       var(--space-xl);
+  flex-wrap: wrap;
+  font-size: 0.875rem;
+  color:     var(--color-text-secondary);
+}
+
+.snapshot-panel__values strong {
+  color:       var(--color-text-primary);
+  font-family: var(--font-mono);
+}
+
+.snapshot-panel__note {
+  font-size:  0.75rem;
+  color:      var(--color-text-muted);
+  font-style: italic;
+  margin-top: var(--space-xs);
+}
+
+/* Production table: specific column widths */
+.td-date     { font-family: var(--font-mono); font-size: 0.82rem; white-space: nowrap; }
+.td-machine  { font-size: 0.87rem; }
+.td-quantity { font-family: var(--font-mono); font-size: 0.85rem; }
+.td-value    {
+  font-family: var(--font-mono);
+  font-size:   0.85rem;
+  font-weight: 600;
+  color:       var(--color-teal);
+}
+
+/* Muted text helper for fallback labels */
+.text-muted { color: var(--color-text-muted); font-style: italic; font-size: 0.82rem; }
 
 /* ── Scrollbar (Webkit) ──────────────────────────────────────── */
 ::-webkit-scrollbar       { width: 6px; height: 6px; }
@@ -854,3 +1026,46 @@ form {
   #toast-container { bottom: var(--space-md); right: var(--space-md); left: var(--space-md); }
   .toast { max-width: 100%; }
 }
+
+/* ── Changelog / Change History ──────────────────────────────── */
+
+.changelog-list { list-style: none; padding: 0 var(--space-lg) var(--space-lg); }
+
+.changelog-item { display: flex; gap: var(--space-md); padding: var(--space-md) 0; }
+
+.changelog-item__marker { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; width: 32px; }
+
+.changelog-item__icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 50%;
+  font-size: 0.85rem; font-weight: 700; flex-shrink: 0;
+}
+.changelog-item__icon--create     { background: var(--color-success-dim); color: var(--color-success); }
+.changelog-item__icon--edit       { background: var(--color-accent-glow); color: var(--color-accent); }
+.changelog-item__icon--activate   { background: var(--color-teal-dim);    color: var(--color-teal); }
+.changelog-item__icon--deactivate { background: var(--color-danger-dim);  color: var(--color-danger); }
+.changelog-item__icon--delete     { background: var(--color-danger-dim);  color: var(--color-danger); }
+
+.changelog-item__line { width: 1px; flex: 1; min-height: 16px; background: var(--color-border); margin-top: var(--space-xs); }
+.changelog-list > .changelog-item:last-child .changelog-item__line { display: none; }
+
+.changelog-item__body { flex: 1; padding-bottom: var(--space-sm); }
+
+.changelog-item__header { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-xs) var(--space-sm); margin-bottom: var(--space-xs); }
+.changelog-item__name   { font-family: var(--font-display); font-size: 0.95rem; color: var(--color-text-primary); flex: 1; min-width: 80px; }
+.changelog-item__time   { font-size: 0.78rem; color: var(--color-text-muted); font-family: var(--font-mono); margin-left: auto; white-space: nowrap; }
+
+.changelog-item__changes { margin-top: var(--space-sm); }
+.changelog-item__changes summary { font-size: 0.8rem; color: var(--color-text-muted); cursor: pointer; padding: var(--space-xs) 0; transition: color var(--transition-fast); }
+.changelog-item__changes summary:hover { color: var(--color-accent); }
+
+.cl-diff-table { margin-top: var(--space-sm); width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.cl-diff-table th { text-align: left; padding: 4px 8px; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); font-weight: 500; font-family: var(--font-display); font-size: 0.78rem; letter-spacing: 0.05em; text-transform: uppercase; }
+.cl-diff-table td { padding: 5px 8px; border-bottom: 1px solid var(--color-border); vertical-align: top; }
+.cl-field  { color: var(--color-text-secondary); font-weight: 500; width: 130px; }
+.cl-before { color: var(--color-danger); font-family: var(--font-mono); }
+.cl-arrow  { color: var(--color-text-muted); width: 20px; text-align: center; }
+.cl-after  { color: var(--color-success); font-family: var(--font-mono); }
+
+.badge--outline { background: transparent; border: 1px solid var(--color-border-light); color: var(--color-text-secondary); }
+.badge--red     { background: var(--color-danger-dim); color: var(--color-danger); }

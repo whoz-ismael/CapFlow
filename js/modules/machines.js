@@ -6,12 +6,17 @@
  *  - Load and display the machines table
  *  - Activate / deactivate machines (no permanent delete)
  *
+ * Data source: api.js (currently backed by localStorage via LocalMachinesStore).
+ * When the backend is ready, flip USE_LOCAL_STORE in api.js — this file needs
+ * zero changes.
+ *
  * All visible text: Spanish
  * All code identifiers: English
  * No business logic lives here.
  */
 
 import { MachinesAPI, ChangeHistoryAPI } from '../api.js';
+import { AuthAPI } from '../auth.js';
 
 // ─── Module State ─────────────────────────────────────────────────────────────
 
@@ -24,8 +29,12 @@ let allMachines = [];
 /**
  * Current value of the status filter dropdown.
  * 'all' | 'active' | 'inactive'
+ * Persisted here so loadMachines() restores the filter after each data reload.
  */
 let activeFilter = 'all';
+
+/** Usuario admin actual para registrar en el historial. */
+let _currentAdmin = { id: null, name: 'Sistema' };
 
 // ─── Entry Point ──────────────────────────────────────────────────────────────
 
@@ -34,8 +43,15 @@ let activeFilter = 'all';
  * Called by the router in app.js.
  * @param {HTMLElement} container
  */
-export function mountMachines(container) {
+export async function mountMachines(container) {
   container.innerHTML = buildModuleHTML();
+
+  const session = await AuthAPI.getSession();
+  _currentAdmin = {
+    id:   session?.user?.id    ?? null,
+    name: session?.user?.email ?? 'Sistema',
+  };
+
   attachFormListeners();
   loadMachines();
 }
@@ -221,6 +237,7 @@ async function loadMachines() {
 
   try {
     allMachines = await MachinesAPI.getAll();
+    // Delegate rendering to applyFilters so the active filter is always restored
     applyFilters();
   } catch (err) {
     showFeedback(`Error al cargar máquinas: ${err.message}`, 'error');
@@ -232,6 +249,7 @@ async function loadMachines() {
 
 /**
  * Render an array of machine objects into the table body.
+ * Called exclusively by applyFilters() — never directly.
  * @param {Array} machines
  */
 function renderTable(machines) {
@@ -252,6 +270,7 @@ function renderTable(machines) {
 
   tbody.innerHTML = machines.map(buildTableRow).join('');
 
+  // Wire row-level action buttons after injecting HTML
   tbody.querySelectorAll('[data-action="edit"]').forEach(btn => {
     btn.addEventListener('click', () => handleEdit(btn.dataset.id));
   });
@@ -269,12 +288,13 @@ function renderTable(machines) {
  * @returns {string}
  */
 function buildTableRow(machine) {
-  const isActive    = machine.isActive !== false;
+  const isActive    = machine.isActive !== false; // default true if missing
   const statusLabel = isActive ? 'Activa'    : 'Inactiva';
   const statusClass = isActive ? 'badge--green' : 'badge--gray';
   const toggleLabel = isActive ? 'Desactivar' : 'Activar';
   const toggleClass = isActive ? 'btn--warning-ghost' : 'btn--success-ghost';
 
+  // Truncate long notes for the table cell — full text lives in the data
   const notesDisplay = machine.notes
     ? escapeHTML(machine.notes.length > 60
         ? machine.notes.slice(0, 60) + '…'
@@ -321,12 +341,15 @@ function attachFormListeners() {
 
   form.addEventListener('submit', handleFormSubmit);
   cancelBtn.addEventListener('click', resetFormToCreateMode);
+
+  // Both filter controls route through the same coordinator
   searchInput.addEventListener('input',   applyFilters);
   statusFilter.addEventListener('change', applyFilters);
 }
 
 /**
  * Handle form submission for both create and edit modes.
+ * Validates first, then calls the appropriate API method.
  * @param {Event} e
  */
 async function handleFormSubmit(e) {
@@ -341,27 +364,25 @@ async function handleFormSubmit(e) {
 
   try {
     if (editingMachine) {
-      const result = await MachinesAPI.update(editingMachine.id, payload);
+      // ── Edit mode → update
+      await MachinesAPI.update(editingMachine.id, payload);
       showFeedback('Máquina actualizada correctamente.', 'success');
 
-      const changes = buildDiff(editingMachine, payload, ['name', 'code', 'notes', 'isActive']);
+      const changes = _buildDiff(editingMachine, payload, ['name', 'code', 'notes', 'isActive']);
       ChangeHistoryAPI.log({
-        entity_type: 'machine',
-        entity_id:   String(editingMachine.id),
-        entity_name: payload.name,
-        action:      'editar',
-        changes,
+        entity_type: 'machine', entity_id: editingMachine.id,
+        entity_name: payload.name, action: 'editar', changes,
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
       });
     } else {
+      // ── Create mode → create
       const result = await MachinesAPI.create(payload);
       showFeedback('Máquina creada correctamente.', 'success');
 
       ChangeHistoryAPI.log({
-        entity_type: 'machine',
-        entity_id:   String(result?.id ?? ''),
-        entity_name: payload.name,
-        action:      'crear',
-        changes:     null,
+        entity_type: 'machine', entity_id: result?.id ?? '',
+        entity_name: payload.name, action: 'crear', changes: null,
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
       });
     }
 
@@ -377,6 +398,7 @@ async function handleFormSubmit(e) {
 
 /**
  * Populate the form with a machine's data and switch to edit mode.
+ * Shows the Status field (hidden in create mode).
  * @param {string} machineId
  */
 function handleEdit(machineId) {
@@ -385,14 +407,17 @@ function handleEdit(machineId) {
 
   editingMachine = machine;
 
+  // Populate fields
   document.getElementById('machine-field-id').value     = machine.id;
   document.getElementById('machine-field-name').value   = machine.name   || '';
   document.getElementById('machine-field-code').value   = machine.code   || '';
   document.getElementById('machine-field-notes').value  = machine.notes  || '';
   document.getElementById('machine-field-active').value = String(machine.isActive !== false);
 
+  // Show the status field — only visible during edit
   document.getElementById('machine-status-group').style.display = '';
 
+  // Update form chrome to edit mode
   document.getElementById('machine-form-title').innerHTML = `
     <span class="card__title-icon">✎</span>
     Editar Máquina
@@ -401,11 +426,13 @@ function handleEdit(machineId) {
     '<span class="btn__icon">✔</span> Guardar Cambios';
   document.getElementById('machine-cancel-btn').style.display = 'inline-flex';
 
+  // Scroll to the form so the user sees it
   document.getElementById('machine-form-card').scrollIntoView({ behavior: 'smooth' });
 }
 
 /**
  * Toggle a machine's active/inactive status.
+ * Uses dedicated activate() / deactivate() methods instead of a generic setStatus().
  * @param {string}  machineId
  * @param {boolean} currentlyActive
  */
@@ -414,9 +441,9 @@ async function handleToggleStatus(machineId, currentlyActive) {
 
   if (!confirm(`¿Deseas ${verb} esta máquina?`)) return;
 
-  const machine = allMachines.find(m => String(m.id) === String(machineId));
-
   try {
+    const machine = allMachines.find(m => String(m.id) === String(machineId));
+
     if (currentlyActive) {
       await MachinesAPI.deactivate(machineId);
       showFeedback('Máquina desactivada.', 'warning');
@@ -426,13 +453,14 @@ async function handleToggleStatus(machineId, currentlyActive) {
     }
 
     ChangeHistoryAPI.log({
-      entity_type: 'machine',
-      entity_id:   String(machineId),
+      entity_type: 'machine', entity_id: machineId,
       entity_name: machine?.name ?? '',
-      action:      currentlyActive ? 'desactivar' : 'activar',
-      changes:     { isActive: { before: currentlyActive, after: !currentlyActive } },
+      action: currentlyActive ? 'desactivar' : 'activar',
+      changes: { isActive: { before: currentlyActive, after: !currentlyActive } },
+      user_id: _currentAdmin.id, user_name: _currentAdmin.name,
     });
 
+    // If this machine was open in the edit form, refresh its displayed status
     if (editingMachine && String(editingMachine.id) === String(machineId)) {
       editingMachine = { ...editingMachine, isActive: !currentlyActive };
       document.getElementById('machine-field-active').value = String(!currentlyActive);
@@ -451,8 +479,11 @@ function resetFormToCreateMode() {
 
   document.getElementById('machine-form').reset();
   document.getElementById('machine-field-id').value = '';
+
+  // Hide the status field — it only makes sense during edit
   document.getElementById('machine-status-group').style.display = 'none';
 
+  // Restore form chrome
   document.getElementById('machine-form-title').innerHTML = `
     <span class="card__title-icon">+</span>
     Nueva Máquina
@@ -466,14 +497,26 @@ function resetFormToCreateMode() {
 
 // ─── Search & Filter Coordinator ──────────────────────────────────────────────
 
+/**
+ * Read both filter controls and re-render the table with matching machines.
+ *
+ * Applies filters in this order:
+ *  1. Text search: substring match on name OR code (case-insensitive)
+ *  2. Status filter: all | active | inactive
+ *
+ * Persists the chosen status in `activeFilter` so loadMachines() can
+ * restore it after any data reload (create / edit / toggle status).
+ */
 function applyFilters() {
   const query  = (document.getElementById('machines-search')?.value || '').trim().toLowerCase();
   const status = document.getElementById('machines-filter-status')?.value || 'all';
 
+  // Keep status selection alive across reloads
   activeFilter = status;
 
   let results = allMachines;
 
+  // 1. Text search — matches name OR code
   if (query) {
     results = results.filter(m =>
       m.name.toLowerCase().includes(query) ||
@@ -481,12 +524,14 @@ function applyFilters() {
     );
   }
 
+  // 2. Status filter
   if (status === 'active') {
     results = results.filter(m => m.isActive !== false);
   } else if (status === 'inactive') {
     results = results.filter(m => m.isActive === false);
   }
 
+  // Show "X de Y máquinas" when any filter is narrowing results
   const isFiltered = query || status !== 'all';
   updateCountBadge(allMachines.length, isFiltered ? results.length : null);
 
@@ -495,6 +540,13 @@ function applyFilters() {
 
 // ─── Form Validation ──────────────────────────────────────────────────────────
 
+/**
+ * Check whether a machine name already exists in allMachines,
+ * ignoring the machine currently being edited.
+ *
+ * @param {string} name
+ * @returns {boolean} true if a DIFFERENT machine already uses this name
+ */
 function isNameDuplicate(name) {
   const normalized = name.trim().toLowerCase();
   return allMachines.some(m => {
@@ -503,6 +555,13 @@ function isNameDuplicate(name) {
   });
 }
 
+/**
+ * Check whether a machine code already exists in allMachines,
+ * ignoring the machine currently being edited.
+ *
+ * @param {string} code
+ * @returns {boolean} true if a DIFFERENT machine already uses this code
+ */
 function isCodeDuplicate(code) {
   const normalized = code.trim().toLowerCase();
   return allMachines.some(m => {
@@ -511,6 +570,11 @@ function isCodeDuplicate(code) {
   });
 }
 
+/**
+ * Validate all required fields and uniqueness constraints.
+ * Displays inline errors next to each offending field.
+ * @returns {boolean} true if the form is valid and safe to submit
+ */
 function validateForm() {
   clearFormErrors();
   let valid = true;
@@ -518,6 +582,7 @@ function validateForm() {
   const name = document.getElementById('machine-field-name').value.trim();
   const code = document.getElementById('machine-field-code').value.trim();
 
+  // ── Name ──────────────────────────────────────────────────────
   if (!name) {
     showFieldError('machine-error-name', 'El nombre de la máquina es obligatorio.');
     valid = false;
@@ -529,6 +594,7 @@ function validateForm() {
     valid = false;
   }
 
+  // ── Code ──────────────────────────────────────────────────────
   if (!code) {
     showFieldError('machine-error-code', 'El código de la máquina es obligatorio.');
     valid = false;
@@ -543,6 +609,7 @@ function validateForm() {
   return valid;
 }
 
+/** Clear all inline field error messages. */
 function clearFormErrors() {
   document.querySelectorAll('#machine-form .form-error')
     .forEach(el => (el.textContent = ''));
@@ -550,6 +617,11 @@ function clearFormErrors() {
     .forEach(el => el.classList.remove('form-input--error'));
 }
 
+/**
+ * Display an inline error under a specific field.
+ * @param {string} errorId - ID of the target <span class="form-error">
+ * @param {string} message
+ */
 function showFieldError(errorId, message) {
   const el = document.getElementById(errorId);
   if (el) el.textContent = message;
@@ -557,6 +629,22 @@ function showFieldError(errorId, message) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/** Build a field-level diff between the original record and the new payload. */
+function _buildDiff(original, updated, fields) {
+  const diff = {};
+  for (const f of fields) {
+    if (String(original[f] ?? '') !== String(updated[f] ?? '')) {
+      diff[f] = { before: original[f], after: updated[f] };
+    }
+  }
+  return Object.keys(diff).length > 0 ? diff : null;
+}
+
+/**
+ * Collect form values into a plain machine payload object.
+ * isActive is only included when editing; new machines default to true.
+ * @returns {Object}
+ */
 function collectFormData() {
   const payload = {
     name:  document.getElementById('machine-field-name').value.trim(),
@@ -564,6 +652,7 @@ function collectFormData() {
     notes: document.getElementById('machine-field-notes').value.trim() || '',
   };
 
+  // Only include isActive when the status field is visible (edit mode)
   const statusGroup = document.getElementById('machine-status-group');
   if (statusGroup && statusGroup.style.display !== 'none') {
     payload.isActive = document.getElementById('machine-field-active').value === 'true';
@@ -573,29 +662,23 @@ function collectFormData() {
 }
 
 /**
- * Build a field-level diff between the original record and the new payload.
- * @param {Object}   original
- * @param {Object}   updated
- * @param {string[]} fields
- * @returns {Object|null}
+ * Show/hide the table loading spinner.
+ * Hides both table wrapper and empty state while loading.
+ * @param {boolean} loading
  */
-function buildDiff(original, updated, fields) {
-  const diff = {};
-  for (const field of fields) {
-    // eslint-disable-next-line eqeqeq
-    if (original[field] != updated[field]) {
-      diff[field] = { before: original[field], after: updated[field] };
-    }
-  }
-  return Object.keys(diff).length > 0 ? diff : null;
-}
-
 function showTableLoading(loading) {
   document.getElementById('machines-table-loading').style.display  = loading ? 'flex'  : 'none';
   document.getElementById('machines-table-wrapper').style.display  = loading ? 'none'  : '';
   document.getElementById('machines-table-empty').style.display    = 'none';
 }
 
+/**
+ * Fire a toast notification using the global #toast-container.
+ *
+ * @param {string} message
+ * @param {'success'|'error'|'warning'|'info'} type
+ * @param {number} [duration=4000]
+ */
 function showFeedback(message, type = 'success', duration = 4000) {
   const container = document.getElementById('toast-container');
   if (!container) return;
@@ -622,6 +705,13 @@ function showFeedback(message, type = 'success', duration = 4000) {
   setTimeout(dismiss, duration);
 }
 
+/**
+ * Update the machines count badge in the module header.
+ * Shows "X de Y máquinas" when a filter is active and narrowing results.
+ *
+ * @param {number}      total      - Total machines in the store
+ * @param {number|null} [filtered] - Filtered count; null = show full total
+ */
 function updateCountBadge(total, filtered = null) {
   const badge = document.getElementById('machines-count-badge');
   if (!badge) return;
@@ -633,6 +723,11 @@ function updateCountBadge(total, filtered = null) {
   }
 }
 
+/**
+ * Put a button into a loading / disabled state while an async operation runs.
+ * @param {HTMLButtonElement} btn
+ * @param {boolean} loading
+ */
 function setButtonLoading(btn, loading) {
   btn.disabled = loading;
   btn.dataset.originalText = btn.dataset.originalText || btn.innerHTML;
@@ -641,6 +736,11 @@ function setButtonLoading(btn, loading) {
     : btn.dataset.originalText;
 }
 
+/**
+ * Escape HTML special characters to prevent XSS when rendering user content.
+ * @param {string} str
+ * @returns {string}
+ */
 function escapeHTML(str) {
   const div = document.createElement('div');
   div.textContent = str;

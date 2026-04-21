@@ -11,7 +11,7 @@
 
   <div id="app">
 
-    <!-- ══ Sidebar Navigation ══════════════════════════════════ -->
+    <!--- ══ Sidebar Navigation ══════════════════════════════════ -->
     <nav class="sidebar" id="sidebar" aria-label="Navegación principal">
 
       <!-- Logo -->
@@ -36,18 +36,35 @@
           <span class="sidebar__link-icon">◈</span> Productos
         </a>
         <a class="sidebar__link" data-route="machines" href="#machines" aria-current="false">
-          <span class="sidebar__link-icon">⚙</span> Máquinas
+          <span class="sidebar__link-icon">⊙</span> Máquinas
         </a>
 
         <span class="sidebar__section-label">Operaciones</span>
         <a class="sidebar__link" data-route="production" href="#production" aria-current="false">
           <span class="sidebar__link-icon">⬡</span> Producción
         </a>
+        <a class="sidebar__link" data-route="raw-materials" href="#raw-materials" aria-current="false">
+          <span class="sidebar__link-icon">⬢</span> Materia Prima
+        </a>
+        <a class="sidebar__link" data-route="operators" href="#operators" aria-current="false">
+          <span class="sidebar__link-icon">◈</span> Operarios
+        </a>
         <a class="sidebar__link" data-route="clients" href="#clients" aria-current="false">
           <span class="sidebar__link-icon">◉</span> Clientes
         </a>
+        <a class="sidebar__link" data-route="inventory" href="#inventory" aria-current="false">
+          <span class="sidebar__link-icon">▦</span> Inventario
+        </a>
         <a class="sidebar__link" data-route="invoicing" href="#invoicing" aria-current="false">
           <span class="sidebar__link-icon">▤</span> Facturación
+        </a>
+
+        <span class="sidebar__section-label">CapDispatch</span>
+        <a class="sidebar__link" data-route="daily-production" href="#daily-production" aria-current="false">
+          <span class="sidebar__link-icon">✦</span> Tapas Diarias
+        </a>
+        <a class="sidebar__link" data-route="pending-sales" href="#pending-sales" aria-current="false">
+          <span class="sidebar__link-icon">⊡</span> Ventas Pendientes
         </a>
 
         <span class="sidebar__section-label">Administración</span>
@@ -56,6 +73,12 @@
         </a>
         <a class="sidebar__link" data-route="investor" href="#investor" aria-current="false">
           <span class="sidebar__link-icon">◇</span> Inversionista
+        </a>
+        <a class="sidebar__link" data-route="expenses" href="#expenses" aria-current="false">
+          <span class="sidebar__link-icon">◎</span> Gastos
+        </a>
+        <a class="sidebar__link" data-route="reports" href="#reports" aria-current="false">
+          <span class="sidebar__link-icon">▦</span> Reportes
         </a>
         <a class="sidebar__link" data-route="changelog" href="#changelog" aria-current="false">
           <span class="sidebar__link-icon">◷</span> Historial
@@ -72,8 +95,133 @@
 
   </div>
 
-  <!-- Toast notifications (used by modules that don't have inline banners) -->
+  <!-- Global toast container — filled by showToast() in any module -->
   <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- Chart.js — loaded via CDN, available as window.Chart -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- Supabase JS client — loaded via CDN, available as window.supabase -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- ══ Debug Console (mobile-friendly) ══════════════════════ -->
+  <script>
+  (function(){
+    const btn = document.createElement('div');
+    btn.id = 'dbg-btn';
+    btn.textContent = '🐛';
+    btn.title = 'Toggle debug console';
+    Object.assign(btn.style, {
+      position:'fixed', bottom:'12px', right:'12px', zIndex:'99999',
+      width:'40px', height:'40px', borderRadius:'50%',
+      background:'#1a1a2e', border:'1px solid #444', color:'#fff',
+      display:'flex', alignItems:'center', justifyContent:'center',
+      fontSize:'20px', cursor:'pointer', boxShadow:'0 2px 8px rgba(0,0,0,.5)',
+      userSelect:'none', WebkitTapHighlightColor:'transparent',
+    });
+
+    const panel = document.createElement('div');
+    panel.id = 'dbg-panel';
+    Object.assign(panel.style, {
+      position:'fixed', bottom:'60px', right:'12px', left:'12px', zIndex:'99998',
+      maxHeight:'45vh', background:'#0e1117', border:'1px solid #333',
+      borderRadius:'8px', display:'none', flexDirection:'column',
+      fontFamily:'monospace', fontSize:'12px', color:'#ccc',
+      boxShadow:'0 4px 20px rgba(0,0,0,.6)',
+    });
+
+    const header = document.createElement('div');
+    Object.assign(header.style, {
+      display:'flex', justifyContent:'space-between', alignItems:'center',
+      padding:'6px 10px', borderBottom:'1px solid #333', color:'#888', fontSize:'11px',
+    });
+    header.innerHTML = '<span>Console</span>';
+    const clearBtn = document.createElement('span');
+    clearBtn.textContent = 'Limpiar';
+    Object.assign(clearBtn.style, { cursor:'pointer', color:'#e74c3c' });
+    clearBtn.onclick = () => { log.innerHTML = ''; entries = 0; badge.style.display = 'none'; };
+    header.appendChild(clearBtn);
+
+    const log = document.createElement('div');
+    Object.assign(log.style, {
+      flex:'1', overflowY:'auto', padding:'6px 10px',
+      whiteSpace:'pre-wrap', wordBreak:'break-all',
+    });
+
+    panel.appendChild(header);
+    panel.appendChild(log);
+
+    const badge = document.createElement('div');
+    Object.assign(badge.style, {
+      position:'absolute', top:'-4px', right:'-4px',
+      background:'#e74c3c', color:'#fff', borderRadius:'50%',
+      width:'18px', height:'18px', fontSize:'10px', fontWeight:'bold',
+      display:'none', alignItems:'center', justifyContent:'center',
+      lineHeight:'18px', textAlign:'center',
+    });
+    btn.style.position = 'fixed';
+    btn.appendChild(badge);
+
+    let open = false;
+    let entries = 0;
+    btn.onclick = () => {
+      open = !open;
+      panel.style.display = open ? 'flex' : 'none';
+      if (open) { badge.style.display = 'none'; log.scrollTop = log.scrollHeight; }
+    };
+
+    function addEntry(type, args) {
+      const colors = { log:'#aaa', warn:'#f39c12', error:'#e74c3c', info:'#4a9eff' };
+      const line = document.createElement('div');
+      line.style.borderBottom = '1px solid #1a1a2e';
+      line.style.padding = '3px 0';
+      line.style.color = colors[type] || '#aaa';
+
+      const ts = new Date().toLocaleTimeString('es-DO', { hour12:false });
+      const prefix = `[${ts}] ${type.toUpperCase()}: `;
+      const text = args.map(a => {
+        if (a instanceof Error) return a.message + (a.stack ? '\n' + a.stack : '');
+        if (typeof a === 'object') try { return JSON.stringify(a, null, 1); } catch { return String(a); }
+        return String(a);
+      }).join(' ');
+
+      line.textContent = prefix + text;
+      log.appendChild(line);
+      entries++;
+
+      if (!open) {
+        badge.style.display = 'flex';
+        badge.textContent = entries > 99 ? '99+' : entries;
+      }
+
+      // Auto-scroll
+      if (open) log.scrollTop = log.scrollHeight;
+
+      // Cap at 200 entries
+      while (log.childNodes.length > 200) log.removeChild(log.firstChild);
+    }
+
+    // Intercept console methods
+    ['log','warn','error','info'].forEach(method => {
+      const orig = console[method].bind(console);
+      console[method] = (...args) => { orig(...args); addEntry(method, args); };
+    });
+
+    // Catch uncaught errors
+    window.addEventListener('error', e => {
+      addEntry('error', [`${e.message} at ${e.filename}:${e.lineno}:${e.colno}`]);
+    });
+
+    // Catch unhandled promise rejections
+    window.addEventListener('unhandledrejection', e => {
+      const reason = e.reason instanceof Error ? e.reason : { message: String(e.reason) };
+      addEntry('error', [`Unhandled rejection: ${reason.message}`]);
+    });
+
+    document.body.appendChild(panel);
+    document.body.appendChild(btn);
+  })();
+  </script>
 
   <!-- App entry point (module type enables ES module imports) -->
   <script type="module" src="js/app.js"></script>
