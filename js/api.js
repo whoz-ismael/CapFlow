@@ -1942,6 +1942,21 @@ export const DailyProductionLogsAPI = {
     return data ?? [];
   },
 
+  async update(id, fields) {
+    const payload = { updated_at: new Date().toISOString() };
+    const allowed = ['production_date','product_id','machine_id','shift','quantity','notes','status','confirmed_at'];
+    allowed.forEach(k => { if (k in fields) payload[k] = fields[k]; });
+
+    const { data, error } = await _sb
+      .from('daily_production_logs')
+      .update(payload)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
   async confirm(id) {
     const { data, error } = await _sb
       .from('daily_production_logs')
@@ -1969,7 +1984,7 @@ export const DispatchOperatorsAPI = {
   async getAll() {
     const { data, error } = await _sb
       .from('dispatch_operators')
-      .select('id, name, role, is_active')
+      .select('id, name, role, is_active, capflow_operator_id')
       .eq('is_active', true)
       .order('name', { ascending: true });
     if (error) throw new Error(error.message);
