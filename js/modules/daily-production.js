@@ -335,9 +335,12 @@ function handleEdit(id) {
 
     saveBtn.disabled = true; saveBtn.textContent = 'Guardando...';
     try {
+      const productId = modal.querySelector('#dp-edit-product').value || null;
+      const product   = productId ? allProducts.find(p => p.id === productId) : null;
       const fields = {
         production_date: modal.querySelector('#dp-edit-date').value,
-        product_id:      modal.querySelector('#dp-edit-product').value || null,
+        product_id:      productId,
+        color:           product ? product.name : entry.color,
         shift:           modal.querySelector('#dp-edit-shift').value   || null,
         machine_id:      modal.querySelector('#dp-edit-machine').value || null,
         quantity:        qty,

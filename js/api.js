@@ -1942,6 +1942,28 @@ export const DailyProductionLogsAPI = {
     return data ?? [];
   },
 
+  async update(id, fields = {}) {
+    const u = { updated_at: new Date().toISOString() };
+    if (fields.production_date !== undefined) u.production_date = fields.production_date;
+    if (fields.product_id      !== undefined) u.product_id      = fields.product_id || null;
+    if (fields.shift           !== undefined) u.shift           = fields.shift || null;
+    if (fields.machine_id      !== undefined) u.machine_id      = fields.machine_id || null;
+    if (fields.quantity        !== undefined) u.quantity        = fields.quantity;
+    if (fields.notes           !== undefined) u.notes           = fields.notes;
+    if (fields.color           !== undefined) u.color           = fields.color;
+    if (fields.status          !== undefined) u.status          = fields.status;
+    if (fields.confirmed_at    !== undefined) u.confirmed_at    = fields.confirmed_at;
+
+    const { data, error } = await _sb
+      .from('daily_production_logs')
+      .update(u)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
   async confirm(id) {
     const { data, error } = await _sb
       .from('daily_production_logs')
