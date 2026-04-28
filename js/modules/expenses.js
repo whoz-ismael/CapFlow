@@ -17,7 +17,12 @@
  * All code identifiers: English
  */
 
-import { ExpensesAPI, InvestorAPI } from '../api.js';
+import {
+  ExpensesAPI,
+  InvestorAPI,
+  ProvidersAPI,
+  ServiceProvidersAPI,
+} from '../api.js';
 
 // --- Constants ---------------------------------------------------------------
 
@@ -63,10 +68,18 @@ const MAX_ATTACH_MB = 1.5;
 
 // --- Module State ------------------------------------------------------------
 
-let editingExpense     = null;
-let allExpenses        = [];
-let currentAttachments = [];
-let investorRecord     = null;
+let editingExpense      = null;
+let allExpenses         = [];
+let currentAttachments  = [];
+let investorRecord      = null;
+let allSuppliers        = [];   // active raw-material suppliers (ProvidersAPI)
+let allServiceProviders = [];   // active service providers (ServiceProvidersAPI)
+
+const PAYABLE_STATUS_LABELS = {
+  unpaid:  'Pendiente',
+  partial: 'Parcial',
+  paid:    'Pagado',
+};
 
 let filterDateFrom  = '';
 let filterDateTo    = '';
@@ -123,6 +136,18 @@ function buildModuleHTML() {
 
         <form id="expenses-form" novalidate>
           <input type="hidden" id="exp-field-id">
+
+          <!-- Accounts Payable toggle (Cuenta por Pagar / Crédito) -->
+          <label class="exp-payable-toggle">
+            <input type="checkbox" id="exp-payable-check">
+            <span class="exp-payable-toggle-label">
+              <strong>Es cuenta por pagar (Crédito)</strong>
+              <span class="form-hint" style="margin:0;">
+                Marca este gasto como pendiente de pago. Se omite el método de pago
+                y se desactiva el financiamiento del inversionista.
+              </span>
+            </span>
+          </label>
 
           <div class="form-grid">
             <!-- Fecha -->
@@ -188,6 +213,70 @@ function buildModuleHTML() {
               <label class="form-label" for="exp-field-notes">Notas (opcional)</label>
               <textarea class="form-input" id="exp-field-notes" rows="2"
                         placeholder="Observaciones adicionales\u2026" maxlength="500"></textarea>
+            </div>
+          </div>
+
+          <!-- Accounts Payable details (shown only when "Es cuenta por pagar" is checked) -->
+          <div class="exp-payable-section" id="exp-payable-section" style="display:none;">
+            <div class="form-grid">
+              <div class="form-group form-group--wide">
+                <label class="form-label">
+                  Tipo de acreedor <span class="required">*</span>
+                </label>
+                <div class="exp-creditor-type">
+                  <label class="exp-radio">
+                    <input type="radio" name="exp-creditor-type" id="exp-creditor-type-supplier"
+                           value="supplier" checked>
+                    <span>Proveedor de materia prima</span>
+                  </label>
+                  <label class="exp-radio">
+                    <input type="radio" name="exp-creditor-type" id="exp-creditor-type-service"
+                           value="service_provider">
+                    <span>Proveedor de servicios</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-group form-group--wide">
+                <label class="form-label" for="exp-creditor-id">
+                  Acreedor <span class="required">*</span>
+                </label>
+                <div style="display:flex;gap:var(--space-sm);align-items:flex-start;flex-wrap:wrap;">
+                  <div class="select-wrapper" style="flex:1 1 220px;min-width:220px;">
+                    <select class="form-input form-select" id="exp-creditor-id">
+                      <option value="" disabled selected>Seleccionar…</option>
+                    </select>
+                  </div>
+                  <button type="button" class="btn btn--ghost btn--sm" id="exp-new-service-provider"
+                          style="display:none;">
+                    + Nuevo proveedor de servicios
+                  </button>
+                </div>
+                <span class="form-error" id="exp-error-creditor"></span>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="exp-due-date">Fecha límite (opcional)</label>
+                <input class="form-input" type="date" id="exp-due-date">
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="exp-payable-status">Estado de pago</label>
+                <div class="select-wrapper">
+                  <select class="form-input form-select" id="exp-payable-status">
+                    <option value="unpaid"  selected>Pendiente</option>
+                    <option value="partial">Parcial</option>
+                    <option value="paid">Pagado</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-group" id="exp-paid-amount-group" style="display:none;">
+                <label class="form-label" for="exp-paid-amount">Monto pagado (RD$)</label>
+                <input class="form-input" type="number" id="exp-paid-amount"
+                       min="0" step="0.01" placeholder="0.00">
+                <span class="form-error" id="exp-error-paid-amount"></span>
+              </div>
             </div>
           </div>
 
@@ -309,6 +398,7 @@ function buildModuleHTML() {
                 <th>Descripci\u00f3n</th>
                 <th class="text-right">Monto</th>
                 <th>M\u00e9todo</th>
+                <th>Estado</th>
                 <th class="text-center">Adj.</th>
                 <th class="text-center">Acciones</th>
               </tr>
@@ -327,11 +417,19 @@ function buildModuleHTML() {
 async function loadExpenses() {
   showTableLoading(true);
   try {
-    [allExpenses, investorRecord] = await Promise.all([
+    const [expenses, investor, suppliers, serviceProviders] = await Promise.all([
       ExpensesAPI.getAll(),
       InvestorAPI.get().catch(() => null),
+      ProvidersAPI.getAll().catch(() => []),
+      ServiceProvidersAPI.getAll().catch(() => []),
     ]);
+    allExpenses         = expenses;
+    investorRecord      = investor;
+    allSuppliers        = (suppliers || []).filter(s => s.isActive !== false);
+    allServiceProviders = (serviceProviders || []).filter(s => s.isActive !== false);
+
     renderInvestorSection();
+    populateCreditorDropdown();
     applyFilters();
   } catch (err) {
     showFeedback(`Error al cargar gastos: ${err.message}`, 'error');
@@ -365,13 +463,26 @@ function renderTable(expenses) {
   tbody.innerHTML = sorted.map(buildTableRow).join('');
 
   // Footer totals
-  const total = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+  const total       = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+  const apOutstand  = expenses
+    .filter(e => e.isPayable && e.payableStatus !== 'paid')
+    .reduce((s, e) => s + ((e.amount || 0) - (e.paidAmount || 0)), 0);
+
+  const outstandRow = apOutstand > 0
+    ? `<tr style="font-weight:600;color:var(--color-warning, #f59e0b);">
+         <th colspan="3" class="text-right">Por pagar (saldo)</th>
+         <th class="text-right">${formatCurrency(apOutstand)}</th>
+         <th colspan="4"></th>
+       </tr>`
+    : '';
+
   tfoot.innerHTML = `
     <tr style="font-weight:600;">
       <th colspan="3" class="text-right">Total</th>
       <th class="text-right">${formatCurrency(total)}</th>
-      <th colspan="3"></th>
+      <th colspan="4"></th>
     </tr>
+    ${outstandRow}
   `;
 
   // Row action listeners
@@ -387,32 +498,62 @@ function renderTable(expenses) {
 }
 
 function buildTableRow(expense) {
-  const methodLabel = METHOD_LABELS.get(expense.method) || expense.method || '\u2014';
   const attCount    = (expense.attachments || []).length;
   const attBadge    = attCount > 0
     ? `<span class="badge badge--blue" style="cursor:pointer;"
-         data-action="view-attach" data-id="${expense.id}">\ud83d\udcce ${attCount}</span>`
-    : '<span style="color:var(--color-text-muted);">\u2014</span>';
+         data-action="view-attach" data-id="${expense.id}">📎 ${attCount}</span>`
+    : '<span style="color:var(--color-text-muted);">—</span>';
   const invBadge    = expense.investorFinancing
     ? `<span class="badge badge--orange" style="font-size:0.75rem;" title="Financiado por el inversionista: ${formatCurrency(expense.investorFinancing.amount)}">◈ INV</span>`
     : '';
 
+  // Metodo cell - AP entries have no payment method.
+  let methodCell;
+  if (expense.isPayable) {
+    methodCell = '<span style="color:var(--color-text-muted);">—</span>';
+  } else {
+    const methodLabel = METHOD_LABELS.get(expense.method) || expense.method || '—';
+    methodCell = `<span class="badge badge--gray" style="font-size:0.78rem;">${escapeHTML(methodLabel)}</span>${invBadge ? ' ' + invBadge : ''}`;
+  }
+
+  // Estado cell - AP entries show payable-status badge + acreedor name.
+  let statusCell = '<span style="color:var(--color-text-muted);">—</span>';
+  if (expense.isPayable) {
+    const badgeClass = expense.payableStatus === 'paid'
+      ? 'badge--green'
+      : expense.payableStatus === 'partial' ? 'badge--blue' : 'badge--warning';
+    const statusLabel  = PAYABLE_STATUS_LABELS[expense.payableStatus] || 'Pendiente';
+    const creditorName = lookupCreditorName(expense.creditorType, expense.creditorId);
+    statusCell = `
+      <div style="display:flex;flex-direction:column;gap:2px;line-height:1.2;">
+        <span class="badge ${badgeClass}" style="font-size:0.75rem;width:max-content;">${escapeHTML(statusLabel)}</span>
+        <span style="font-size:0.72rem;color:var(--color-text-muted);">${escapeHTML(creditorName || '—')}</span>
+      </div>`;
+  }
+
   return `
     <tr class="table-row">
       <td style="white-space:nowrap;">${escapeHTML(formatDate(expense.expenseDate))}</td>
-      <td><span class="badge badge--teal" style="font-size:0.78rem;">${escapeHTML(expense.category || '\u2014')}</span></td>
-      <td>${escapeHTML(expense.description || '\u2014')}</td>
+      <td><span class="badge badge--teal" style="font-size:0.78rem;">${escapeHTML(expense.category || '—')}</span></td>
+      <td>${escapeHTML(expense.description || '—')}</td>
       <td class="text-right" style="font-family:var(--font-mono);white-space:nowrap;">${formatCurrency(expense.amount)}</td>
-      <td><span class="badge badge--gray" style="font-size:0.78rem;">${escapeHTML(methodLabel)}</span>${invBadge ? ' ' + invBadge : ''}</td>
+      <td>${methodCell}</td>
+      <td>${statusCell}</td>
       <td class="text-center">${attBadge}</td>
       <td class="text-center td-actions">
         <button class="btn btn--ghost btn--xs" data-action="edit" data-id="${expense.id}"
-                title="Editar gasto">\u270e Editar</button>
+                title="Editar gasto">✎ Editar</button>
         <button class="btn btn--danger btn--xs" data-action="delete" data-id="${expense.id}"
-                title="Eliminar gasto">\u2715 Eliminar</button>
+                title="Eliminar gasto">✕ Eliminar</button>
       </td>
     </tr>
   `;
+}
+
+function lookupCreditorName(type, id) {
+  if (!type || !id) return '';
+  const list = type === 'service_provider' ? allServiceProviders : allSuppliers;
+  return list.find(p => String(p.id) === String(id))?.name || '';
 }
 
 // --- Form Interactions -------------------------------------------------------
@@ -423,9 +564,28 @@ function attachFormListeners() {
   document.getElementById('expenses-cancel-btn')
     .addEventListener('click', resetFormToCreateMode);
 
+  // Accounts Payable toggle — show/hide AP section, enforce mutual exclusion
+  document.getElementById('exp-payable-check')
+    .addEventListener('change', e => setPayableMode(e.target.checked));
+
+  // Creditor type radios — repopulate the acreedor dropdown
+  document.querySelectorAll('input[name="exp-creditor-type"]').forEach(r => {
+    r.addEventListener('change', () => populateCreditorDropdown());
+  });
+
+  // Payable status — show/hide paid amount field
+  document.getElementById('exp-payable-status')
+    .addEventListener('change', e => updatePaidAmountVisibility(e.target.value));
+
+  // "+ Nuevo proveedor de servicios"
+  document.getElementById('exp-new-service-provider')
+    .addEventListener('click', () => openServiceProviderModal());
+
   // Investor financing checkbox — show/hide amount fields
   document.getElementById('exp-investor-check')
     .addEventListener('change', e => {
+      // Mutual exclusion: investor financing cannot coexist with AP mode
+      if (e.target.checked) setPayableMode(false);
       const fields  = document.getElementById('exp-investor-fields');
       fields.style.display = e.target.checked ? '' : 'none';
       if (e.target.checked) {
@@ -456,8 +616,13 @@ async function handleFormSubmit(e) {
   setButtonLoading(submitBtn, true);
 
   try {
-    // Collect investor financing fields
-    const investorChecked = document.getElementById('exp-investor-check')?.checked && investorRecord;
+    const isPayable    = document.getElementById('exp-payable-check').checked;
+    const amount       = parseFloat(document.getElementById('exp-field-amount').value) || 0;
+
+    // Collect investor financing fields (mutually exclusive with AP)
+    const investorChecked = !isPayable
+      && document.getElementById('exp-investor-check')?.checked
+      && !!investorRecord;
     const investorAmount  = investorChecked
       ? (parseFloat(document.getElementById('exp-investor-amount').value) || 0)
       : 0;
@@ -476,15 +641,40 @@ async function handleFormSubmit(e) {
       ? { amount: investorAmount, note: investorNote }
       : null;
 
+    // Collect AP fields and apply rule 4 (paidAmount auto-fills on 'paid';
+    // 'partial' requires 0 < paidAmount < amount).
+    let creditorType  = null;
+    let creditorId    = null;
+    let payableStatus = 'unpaid';
+    let dueDate       = null;
+    let paidAmount    = 0;
+
+    if (isPayable) {
+      creditorType  = (document.querySelector('input[name="exp-creditor-type"]:checked')?.value) || null;
+      creditorId    = document.getElementById('exp-creditor-id').value || null;
+      payableStatus = document.getElementById('exp-payable-status').value || 'unpaid';
+      dueDate       = document.getElementById('exp-due-date').value || null;
+      paidAmount    = parseFloat(document.getElementById('exp-paid-amount').value) || 0;
+
+      if (payableStatus === 'paid')   paidAmount = amount;
+      if (payableStatus === 'unpaid') paidAmount = 0;
+    }
+
     const payload = {
       expenseDate:       document.getElementById('exp-field-date').value,
       category:          document.getElementById('exp-field-category').value,
-      method:            document.getElementById('exp-field-method').value,
-      amount:            parseFloat(document.getElementById('exp-field-amount').value) || 0,
+      method:            isPayable ? null : document.getElementById('exp-field-method').value,
+      amount,
       description:       document.getElementById('exp-field-description').value.trim(),
       notes:             document.getElementById('exp-field-notes').value.trim(),
       attachments:       [...currentAttachments],
       investorFinancing,
+      isPayable,
+      creditorType,
+      creditorId,
+      payableStatus,
+      dueDate,
+      paidAmount,
     };
 
     let savedExpense;
@@ -496,7 +686,9 @@ async function handleFormSubmit(e) {
       showFeedback('Gasto registrado correctamente.', 'success');
     }
 
-    // Sync investor debt: reconcile covers create, edit (delta), and removal
+    // Sync investor debt: reconcile covers create, edit (delta), and removal.
+    // For AP expenses we always reconcile to 0 to make sure any prior linkage
+    // is wiped clean.
     if (investorRecord) {
       const expenseId  = savedExpense.id;
       const targetAmt  = investorFinancing ? investorFinancing.amount : 0;
@@ -529,6 +721,28 @@ function handleEdit(expenseId) {
   document.getElementById('exp-field-description').value = expense.description || '';
   document.getElementById('exp-field-notes').value       = expense.notes || '';
 
+  // Accounts Payable section
+  const payableCheck = document.getElementById('exp-payable-check');
+  payableCheck.checked = !!expense.isPayable;
+  if (expense.isPayable) {
+    const typeRadio = document.getElementById(
+      expense.creditorType === 'service_provider'
+        ? 'exp-creditor-type-service'
+        : 'exp-creditor-type-supplier'
+    );
+    if (typeRadio) typeRadio.checked = true;
+
+    populateCreditorDropdown(expense.creditorId || '');
+
+    document.getElementById('exp-due-date').value       = expense.dueDate || '';
+    document.getElementById('exp-payable-status').value = expense.payableStatus || 'unpaid';
+    document.getElementById('exp-paid-amount').value    = expense.paidAmount || '';
+    setPayableMode(true);
+    updatePaidAmountVisibility(expense.payableStatus || 'unpaid');
+  } else {
+    setPayableMode(false);
+  }
+
   // Populate investor financing fields if applicable
   const invCheck  = document.getElementById('exp-investor-check');
   const invFields = document.getElementById('exp-investor-fields');
@@ -558,7 +772,18 @@ async function handleDelete(expenseId) {
   if (!expense) return;
 
   const label = expense.description || expense.category || 'este gasto';
-  if (!confirm(`\u00bfEliminar "${label}"?\n\nEsta acci\u00f3n no se puede deshacer.`)) return;
+  let promptText = `\u00bfEliminar "${label}"?\n\nEsta acci\u00f3n no se puede deshacer.`;
+  if (expense.isPayable) {
+    const creditor = lookupCreditorName(expense.creditorType, expense.creditorId) || '\u2014';
+    const status   = PAYABLE_STATUS_LABELS[expense.payableStatus] || 'Pendiente';
+    promptText =
+      `\u00bfEliminar la cuenta por pagar "${label}"?\n\n` +
+      `Acreedor: ${creditor}\n` +
+      `Estado: ${status}\n` +
+      `Monto: ${formatCurrency(expense.amount)}\n\n` +
+      `Esta acci\u00f3n no se puede deshacer.`;
+  }
+  if (!confirm(promptText)) return;
 
   try {
     // Revert investor financing before deleting
@@ -589,6 +814,15 @@ function resetFormToCreateMode() {
   document.getElementById('exp-field-id').value   = '';
   document.getElementById('exp-field-date').value = todayString();
 
+  // Reset Accounts Payable section
+  document.getElementById('exp-payable-check').checked = false;
+  document.getElementById('exp-creditor-type-supplier').checked = true;
+  document.getElementById('exp-creditor-id').value   = '';
+  document.getElementById('exp-due-date').value      = '';
+  document.getElementById('exp-payable-status').value = 'unpaid';
+  document.getElementById('exp-paid-amount').value   = '';
+  setPayableMode(false);
+
   // Reset investor financing section
   const invCheck  = document.getElementById('exp-investor-check');
   const invFields = document.getElementById('exp-investor-fields');
@@ -614,7 +848,147 @@ function resetFormToCreateMode() {
 function renderInvestorSection() {
   const section = document.getElementById('exp-investor-section');
   if (!section) return;
-  section.style.display = investorRecord ? '' : 'none';
+  // Hidden when no investor is configured OR when AP mode is on.
+  const apOn = document.getElementById('exp-payable-check')?.checked === true;
+  section.style.display = (investorRecord && !apOn) ? '' : 'none';
+}
+
+// --- Accounts Payable section -------------------------------------------------
+
+/** Toggle the AP section, payment method visibility, and investor section. */
+function setPayableMode(on) {
+  const apSection      = document.getElementById('exp-payable-section');
+  const methodGroup    = document.getElementById('exp-field-method')?.closest('.form-group');
+  const methodSelect   = document.getElementById('exp-field-method');
+  const investorSect   = document.getElementById('exp-investor-section');
+  const investorCheck  = document.getElementById('exp-investor-check');
+  const investorFields = document.getElementById('exp-investor-fields');
+  const payableCheck   = document.getElementById('exp-payable-check');
+
+  if (payableCheck.checked !== on) payableCheck.checked = on;
+
+  if (apSection)    apSection.style.display    = on ? '' : 'none';
+  if (methodGroup)  methodGroup.style.display  = on ? 'none' : '';
+  if (methodSelect) methodSelect.required      = !on;
+
+  if (on) {
+    // Mutual exclusion: clear and hide investor financing.
+    if (investorCheck)  investorCheck.checked        = false;
+    if (investorFields) investorFields.style.display = 'none';
+    if (investorSect)   investorSect.style.display   = 'none';
+    populateCreditorDropdown();
+    updatePaidAmountVisibility(document.getElementById('exp-payable-status').value);
+  } else if (investorRecord && investorSect) {
+    investorSect.style.display = '';
+  }
+}
+
+/** Populate the acreedor dropdown based on the current creditor-type radio. */
+function populateCreditorDropdown(preselectId = '') {
+  const sel        = document.getElementById('exp-creditor-id');
+  const newSpBtn   = document.getElementById('exp-new-service-provider');
+  if (!sel) return;
+
+  const type = document.querySelector('input[name="exp-creditor-type"]:checked')?.value || 'supplier';
+  const list = type === 'service_provider' ? allServiceProviders : allSuppliers;
+
+  const placeholder = list.length === 0
+    ? (type === 'service_provider'
+        ? 'No hay proveedores de servicios — crea uno con "+ Nuevo"'
+        : 'No hay proveedores de materia prima activos')
+    : 'Seleccionar…';
+
+  sel.innerHTML =
+    `<option value="" disabled ${preselectId ? '' : 'selected'}>${escapeHTML(placeholder)}</option>` +
+    list.map(p =>
+      `<option value="${escapeHTML(p.id)}" ${String(p.id) === String(preselectId) ? 'selected' : ''}>${escapeHTML(p.name)}</option>`
+    ).join('');
+
+  if (newSpBtn) newSpBtn.style.display = type === 'service_provider' ? '' : 'none';
+}
+
+/** Show the paid-amount input only for partial / paid statuses. */
+function updatePaidAmountVisibility(status) {
+  const group = document.getElementById('exp-paid-amount-group');
+  const input = document.getElementById('exp-paid-amount');
+  if (!group || !input) return;
+  if (status === 'partial' || status === 'paid') {
+    group.style.display = '';
+    if (status === 'paid') {
+      const amt = parseFloat(document.getElementById('exp-field-amount').value) || 0;
+      if (amt > 0) input.value = amt.toFixed(2);
+      input.readOnly = true;
+    } else {
+      input.readOnly = false;
+    }
+  } else {
+    group.style.display = 'none';
+    input.value         = '';
+  }
+}
+
+/** Inline modal for creating a new service provider on the fly. */
+function openServiceProviderModal() {
+  const overlay = document.createElement('div');
+  overlay.className = 'exp-sp-overlay';
+  overlay.innerHTML = `
+    <div class="exp-sp-modal" role="dialog" aria-modal="true" aria-labelledby="exp-sp-title">
+      <h3 id="exp-sp-title" class="exp-sp-title">Nuevo proveedor de servicios</h3>
+      <div class="form-group">
+        <label class="form-label" for="exp-sp-name">Nombre <span class="required">*</span></label>
+        <input class="form-input" id="exp-sp-name" type="text" maxlength="120" autofocus>
+        <span class="form-error" id="exp-sp-error"></span>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="exp-sp-phone">Teléfono (opcional)</label>
+        <input class="form-input" id="exp-sp-phone" type="tel" maxlength="40">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="exp-sp-notes">Notas (opcional)</label>
+        <textarea class="form-input" id="exp-sp-notes" rows="2" maxlength="300"></textarea>
+      </div>
+      <div class="exp-sp-actions">
+        <button type="button" class="btn btn--ghost btn--sm" id="exp-sp-cancel">Cancelar</button>
+        <button type="button" class="btn btn--primary btn--sm" id="exp-sp-save">Guardar</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('#exp-sp-cancel').addEventListener('click', close);
+
+  overlay.querySelector('#exp-sp-save').addEventListener('click', async () => {
+    const nameEl  = overlay.querySelector('#exp-sp-name');
+    const phoneEl = overlay.querySelector('#exp-sp-phone');
+    const notesEl = overlay.querySelector('#exp-sp-notes');
+    const errEl   = overlay.querySelector('#exp-sp-error');
+
+    const name = nameEl.value.trim();
+    if (!name) {
+      errEl.textContent = 'El nombre es obligatorio.';
+      return;
+    }
+    const saveBtn = overlay.querySelector('#exp-sp-save');
+    setButtonLoading(saveBtn, true);
+    try {
+      const created = await ServiceProvidersAPI.create({
+        name, phone: phoneEl.value.trim(), notes: notesEl.value.trim(),
+      });
+      allServiceProviders = [...allServiceProviders, created]
+        .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+      // Force creditor type to "service_provider" and select the new entry.
+      document.getElementById('exp-creditor-type-service').checked = true;
+      populateCreditorDropdown(created.id);
+      close();
+      showFeedback('Proveedor de servicios creado.', 'success');
+    } catch (err) {
+      errEl.textContent = `Error al guardar: ${err.message}`;
+      setButtonLoading(saveBtn, false);
+    }
+  });
 }
 
 // --- Filter Coordinator ------------------------------------------------------
@@ -736,6 +1110,8 @@ function validateForm() {
   clearFormErrors();
   let valid = true;
 
+  const isPayable = document.getElementById('exp-payable-check').checked;
+
   if (!document.getElementById('exp-field-date').value) {
     showFieldError('exp-error-date', 'La fecha es obligatoria.');
     valid = false;
@@ -744,7 +1120,7 @@ function validateForm() {
     showFieldError('exp-error-category', 'Selecciona una categor\u00eda.');
     valid = false;
   }
-  if (!document.getElementById('exp-field-method').value) {
+  if (!isPayable && !document.getElementById('exp-field-method').value) {
     showFieldError('exp-error-method', 'Selecciona un m\u00e9todo de pago.');
     valid = false;
   }
@@ -756,6 +1132,28 @@ function validateForm() {
   if (!document.getElementById('exp-field-description').value.trim()) {
     showFieldError('exp-error-description', 'La descripci\u00f3n es obligatoria.');
     valid = false;
+  }
+
+  if (isPayable) {
+    if (!document.querySelector('input[name="exp-creditor-type"]:checked')) {
+      showFieldError('exp-error-creditor', 'Selecciona el tipo de acreedor.');
+      valid = false;
+    }
+    if (!document.getElementById('exp-creditor-id').value) {
+      showFieldError('exp-error-creditor', 'Selecciona un acreedor.');
+      valid = false;
+    }
+    const status = document.getElementById('exp-payable-status').value;
+    if (status === 'partial') {
+      const paid = parseFloat(document.getElementById('exp-paid-amount').value) || 0;
+      if (paid <= 0 || paid >= amount) {
+        showFieldError(
+          'exp-error-paid-amount',
+          'El monto pagado parcial debe ser mayor a 0 y menor al monto total.'
+        );
+        valid = false;
+      }
+    }
   }
 
   return valid;
@@ -902,6 +1300,64 @@ function injectStyles() {
       background: color-mix(in srgb, var(--color-warning, #f59e0b) 8%, transparent);
       border: 1px solid color-mix(in srgb, var(--color-warning, #f59e0b) 30%, transparent);
       border-radius: var(--radius-md);
+    }
+
+    /* Accounts Payable */
+    .exp-payable-toggle {
+      display: flex; align-items: flex-start; gap: var(--space-sm);
+      cursor: pointer;
+      margin-bottom: var(--space-md);
+      padding: var(--space-sm) var(--space-md);
+      background: color-mix(in srgb, var(--color-info, #3b82f6) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--color-info, #3b82f6) 25%, transparent);
+      border-radius: var(--radius-md);
+    }
+    .exp-payable-toggle input[type="checkbox"] {
+      margin-top: 3px; flex-shrink: 0;
+      accent-color: var(--color-info, #3b82f6);
+    }
+    .exp-payable-toggle-label {
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .exp-payable-section {
+      margin-top: var(--space-md);
+      padding: var(--space-md);
+      background: color-mix(in srgb, var(--color-info, #3b82f6) 5%, transparent);
+      border: 1px solid color-mix(in srgb, var(--color-info, #3b82f6) 25%, transparent);
+      border-radius: var(--radius-md);
+    }
+    .exp-creditor-type {
+      display: flex; flex-wrap: wrap; gap: var(--space-md);
+    }
+    .exp-radio {
+      display: inline-flex; align-items: center; gap: var(--space-xs);
+      cursor: pointer; user-select: none;
+    }
+    .exp-radio input[type="radio"] { accent-color: var(--color-info, #3b82f6); }
+
+    /* Inline service-provider modal */
+    .exp-sp-overlay {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.55);
+      display: flex; align-items: center; justify-content: center;
+      padding: var(--space-md);
+    }
+    .exp-sp-modal {
+      width: 100%; max-width: 420px;
+      background: var(--color-bg-card);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-lg);
+      padding: var(--space-lg);
+      box-shadow: 0 12px 32px rgba(0,0,0,0.55);
+    }
+    .exp-sp-title {
+      margin: 0 0 var(--space-md);
+      font-size: 1.05rem;
+      font-family: var(--font-display);
+    }
+    .exp-sp-actions {
+      display: flex; gap: var(--space-sm); justify-content: flex-end;
+      margin-top: var(--space-md);
     }
   `;
   document.head.appendChild(tag);
