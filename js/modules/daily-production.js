@@ -364,10 +364,19 @@ async function handleConfirm(id) {
   const entry = allEntries.find(e => e.id === id);
   if (!entry) return;
 
-  const capflowOperatorId   = entry.dispatch_operators?.capflow_operator_id ?? null;
+  // Resolve capflow_operator_id from the already-loaded dispatch operators list
+  const dispatchOp      = allOperators.find(op => op.id === entry.operator_id);
+  const capflowOperatorId   = dispatchOp?.capflow_operator_id ?? null;
   const needsOperatorSelect = capflowOperatorId === null;
-  const hasRequiredFields   = entry.machine_id && entry.product_id;
+  const needsProduct        = !entry.product_id;
+  const needsMachine        = !entry.machine_id;
 
+  const productOptions = allProducts
+    .map(p => `<option value="${p.id}">${p.name}</option>`)
+    .join('');
+  const machineOptions = allMachines
+    .map(m => `<option value="${m.id}">${m.name || m.code || m.id}</option>`)
+    .join('');
   const operatorOptions = allCapFlowOperators
     .filter(op => op.isActive !== false)
     .map(op => `<option value="${op.id}">${op.name}</option>`)
@@ -382,16 +391,31 @@ async function handleConfirm(id) {
       <p style="font-size:.875rem;color:var(--color-text-secondary);margin:0 0 var(--space-lg);">
         <strong>${entry.operator_name}</strong> &middot; ${entry.color} &middot; ${entry.quantity.toLocaleString('es-DO')} paquetes &middot; ${entry.production_date}
       </p>
-      ${!hasRequiredFields ? `
-        <div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.4);border-radius:var(--radius-md);padding:.75rem 1rem;font-size:.82rem;color:#d97706;margin-bottom:var(--space-md);">
-          ⚠️ Este registro fue creado antes de la actualización y no puede generar un registro de producción automáticamente. Se confirmará el estado solamente.
-        </div>` : ''}
-      ${hasRequiredFields ? `
+      ${needsProduct ? `
         <div class="form-group">
-          <label class="form-label">Tarifa del operador (RD$/paquete) <span style="color:var(--color-danger);">*</span></label>
-          <input id="dp-confirm-rate" type="number" class="form-input" min="0.01" step="0.01" placeholder="Ej: 0.50"/>
+          <label class="form-label">Producto <span style="color:var(--color-danger);">*</span></label>
+          <div class="select-wrapper">
+            <select id="dp-confirm-product" class="form-input form-select">
+              <option value="">— Selecciona un producto —</option>
+              ${productOptions}
+            </select>
+          </div>
         </div>` : ''}
-      ${hasRequiredFields && needsOperatorSelect ? `
+      ${needsMachine ? `
+        <div class="form-group">
+          <label class="form-label">Máquina <span style="color:var(--color-danger);">*</span></label>
+          <div class="select-wrapper">
+            <select id="dp-confirm-machine" class="form-input form-select">
+              <option value="">— Selecciona una máquina —</option>
+              ${machineOptions}
+            </select>
+          </div>
+        </div>` : ''}
+      <div class="form-group">
+        <label class="form-label">Tarifa del operador (RD$/paquete) <span style="color:var(--color-danger);">*</span></label>
+        <input id="dp-confirm-rate" type="number" class="form-input" min="0.01" step="0.01" placeholder="Ej: 0.50"/>
+      </div>
+      ${needsOperatorSelect ? `
         <div class="form-group">
           <label class="form-label">Operario CapFlow <span style="color:var(--color-danger);">*</span></label>
           <div class="select-wrapper">
@@ -418,53 +442,72 @@ async function handleConfirm(id) {
     const okBtn = modal.querySelector('#dp-confirm-ok');
     const errEl = modal.querySelector('#dp-confirm-err');
 
-    let operatorRateSnapshot = null;
-    let resolvedOperatorId   = capflowOperatorId;
+    // Rate
+    const operatorRateSnapshot = Number(modal.querySelector('#dp-confirm-rate')?.value);
+    if (!operatorRateSnapshot || operatorRateSnapshot <= 0) {
+      errEl.textContent = 'Ingresa una tarifa válida mayor a 0.';
+      errEl.style.display = 'block';
+      return;
+    }
 
-    if (hasRequiredFields) {
-      const rateInput = modal.querySelector('#dp-confirm-rate');
-      operatorRateSnapshot = rateInput ? Number(rateInput.value) : null;
-      if (!operatorRateSnapshot || operatorRateSnapshot <= 0) {
-        errEl.textContent = 'Ingresa una tarifa válida mayor a 0.';
+    // Product
+    let resolvedProductId = entry.product_id;
+    if (needsProduct) {
+      resolvedProductId = modal.querySelector('#dp-confirm-product')?.value || null;
+      if (!resolvedProductId) {
+        errEl.textContent = 'Selecciona un producto.';
         errEl.style.display = 'block';
         return;
       }
+    }
 
-      if (needsOperatorSelect) {
-        const opSel = modal.querySelector('#dp-confirm-operator');
-        resolvedOperatorId = opSel ? opSel.value : null;
-        if (!resolvedOperatorId) {
-          errEl.textContent = 'Selecciona un operario de CapFlow.';
-          errEl.style.display = 'block';
-          return;
-        }
+    // Machine
+    let resolvedMachineId = entry.machine_id;
+    if (needsMachine) {
+      resolvedMachineId = modal.querySelector('#dp-confirm-machine')?.value || null;
+      if (!resolvedMachineId) {
+        errEl.textContent = 'Selecciona una máquina.';
+        errEl.style.display = 'block';
+        return;
+      }
+    }
+
+    // CapFlow operator
+    let resolvedOperatorId = capflowOperatorId;
+    if (needsOperatorSelect) {
+      resolvedOperatorId = modal.querySelector('#dp-confirm-operator')?.value || null;
+      if (!resolvedOperatorId) {
+        errEl.textContent = 'Selecciona un operario de CapFlow.';
+        errEl.style.display = 'block';
+        return;
       }
     }
 
     okBtn.disabled = true; okBtn.textContent = 'Confirmando...';
 
     try {
-      // Step 1: Confirm the log record
+      // Save resolved product/machine onto the log record before confirming
+      await DailyProductionLogsAPI.update(id, {
+        product_id: resolvedProductId,
+        machine_id: resolvedMachineId,
+      });
+
       const confirmed = await DailyProductionLogsAPI.confirm(id);
 
-      // Step 2: Create production record (only if entry has required fields)
-      if (hasRequiredFields) {
-        try {
-          await ProductionAPI.create({
-            productId:                entry.product_id,
-            machineId:                entry.machine_id,
-            operatorId:               resolvedOperatorId,
-            shift:                    entry.shift,
-            quantity:                 entry.quantity,
-            productionDate:           entry.production_date,
-            operatorRateSnapshot:     operatorRateSnapshot,
-            weightPerPackageSnapshot: 0,
-          });
-        } catch (prodErr) {
-          // Revert confirmation so admin can try again
-          await DailyProductionLogsAPI.update(id, { status: 'pending_review', confirmed_at: null });
-          throw new Error('Error al crear registro de producción: ' + prodErr.message);
-        }
+      try {
+        await ProductionAPI.create({
+          productId:                resolvedProductId,
+          machineId:                resolvedMachineId,
+          operatorId:               resolvedOperatorId,
+          shift:                    entry.shift,
+          quantity:                 entry.quantity,
+          productionDate:           entry.production_date,
+          operatorRateSnapshot:     operatorRateSnapshot,
+          weightPerPackageSnapshot: 0,
+        });
+      } catch (prodErr) {
+        await DailyProductionLogsAPI.update(id, { status: 'pending_review', confirmed_at: null });
+        throw new Error('Error al crear registro de producción: ' + prodErr.message);
       }
 
       const idx = allEntries.findIndex(e => e.id === id);

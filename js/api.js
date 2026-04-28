@@ -1991,7 +1991,7 @@ export const DispatchOperatorsAPI = {
   async getAll() {
     const { data, error } = await _sb
       .from('dispatch_operators')
-      .select('id, name, role, is_active')
+      .select('id, name, role, is_active, capflow_operator_id')
       .eq('is_active', true)
       .order('name', { ascending: true });
     if (error) throw new Error(error.message);
