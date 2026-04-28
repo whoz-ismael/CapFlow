@@ -1709,6 +1709,12 @@ function _expenseFromDb(r) {
     notes:             r.notes,
     attachments:       Array.isArray(r.attachments) ? r.attachments : [],
     investorFinancing: r.investor_financing || null,
+    isPayable:         r.is_payable === true,
+    creditorType:      r.creditor_type ?? null,
+    creditorId:        r.creditor_id ?? null,
+    payableStatus:     r.payable_status ?? 'unpaid',
+    dueDate:           r.due_date ?? null,
+    paidAmount:        Number(r.paid_amount ?? 0),
     createdAt:         r.created_at,
     updatedAt:         r.updated_at,
   };
@@ -1729,17 +1735,24 @@ export const ExpensesAPI = {
   },
 
   async create(d) {
-    const now = new Date().toISOString();
+    const now       = new Date().toISOString();
+    const isPayable = Boolean(d.isPayable);
     const row = {
       id:                 _genId('exp'),
       expense_date:       d.expenseDate || d.expense_date || '',
       category:           d.category || '',
       description:        d.description || '',
       amount:             Number(d.amount) || 0,
-      method:             d.method || '',
+      method:             isPayable ? null : (d.method || ''),
       notes:              d.notes || '',
       attachments:        Array.isArray(d.attachments) ? d.attachments : [],
-      investor_financing: d.investorFinancing || null,
+      investor_financing: isPayable ? null : (d.investorFinancing || null),
+      is_payable:         isPayable,
+      creditor_type:      isPayable ? (d.creditorType || null) : null,
+      creditor_id:        isPayable ? (d.creditorId   || null) : null,
+      payable_status:     isPayable ? (d.payableStatus || 'unpaid') : 'unpaid',
+      due_date:           isPayable ? (d.dueDate || null) : null,
+      paid_amount:        isPayable ? (Number(d.paidAmount) || 0) : 0,
       created_at:         now,
       updated_at:         now,
     };
@@ -1758,6 +1771,27 @@ export const ExpensesAPI = {
     if (d.notes              !== undefined) u.notes              = d.notes;
     if (d.attachments        !== undefined) u.attachments        = d.attachments;
     if (d.investorFinancing  !== undefined) u.investor_financing = d.investorFinancing;
+    if (d.isPayable          !== undefined) u.is_payable         = Boolean(d.isPayable);
+    if (d.creditorType       !== undefined) u.creditor_type      = d.creditorType   || null;
+    if (d.creditorId         !== undefined) u.creditor_id        = d.creditorId     || null;
+    if (d.payableStatus      !== undefined) u.payable_status     = d.payableStatus  || 'unpaid';
+    if (d.dueDate            !== undefined) u.due_date           = d.dueDate        || null;
+    if (d.paidAmount         !== undefined) u.paid_amount        = Number(d.paidAmount) || 0;
+
+    // Enforce mutual exclusion server-side too: when an expense is marked
+    // payable, drop method + investor financing. When unmarked, force AP
+    // fields back to defaults so stale data does not linger.
+    if (d.isPayable === true) {
+      u.method             = null;
+      u.investor_financing = null;
+    } else if (d.isPayable === false) {
+      u.creditor_type  = null;
+      u.creditor_id    = null;
+      u.payable_status = 'unpaid';
+      u.due_date       = null;
+      u.paid_amount    = 0;
+    }
+
     const { data, error } = await _sb.from('expenses').update(u)
       .eq('id', String(id)).select().single();
     if (error) throw new Error(error.message);
@@ -1769,6 +1803,68 @@ export const ExpensesAPI = {
     if (error) throw new Error(error.message);
     return null;
   },
+};
+
+
+// =============================================================================
+// SERVICE PROVIDERS (creditors used in Gastos — Cuentas por Pagar)
+//
+// DB: id, name, phone, notes, is_active, created_at, updated_at
+// JS: id, name, phone, notes, isActive,  createdAt,  updatedAt
+//
+// Distinct from the `providers` table (which is for raw-material suppliers).
+// =============================================================================
+
+function _serviceProviderFromDb(r) {
+  return {
+    id:        r.id,
+    name:      r.name,
+    phone:     r.phone || '',
+    notes:     r.notes || '',
+    isActive:  r.is_active !== false,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+export const ServiceProvidersAPI = {
+  async getAll() {
+    const { data, error } = await _sb.from('service_providers')
+      .select('*').order('name', { ascending: true });
+    if (error) throw new Error(error.message);
+    return (data || []).map(_serviceProviderFromDb);
+  },
+
+  async create(d) {
+    const row = {
+      id:         _genId('sp'),
+      name:       (d.name || '').trim(),
+      phone:      (d.phone || '').trim() || null,
+      notes:      (d.notes || '').trim() || null,
+      is_active:  true,
+      created_at: new Date().toISOString(),
+    };
+    const { data, error } = await _sb.from('service_providers')
+      .insert(row).select().single();
+    if (error) throw new Error(error.message);
+    return _serviceProviderFromDb(data);
+  },
+
+  async update(id, d) {
+    const u = { updated_at: new Date().toISOString() };
+    if (d.name     !== undefined) u.name      = (d.name || '').trim();
+    if (d.phone    !== undefined) u.phone     = (d.phone || '').trim() || null;
+    if (d.notes    !== undefined) u.notes     = (d.notes || '').trim() || null;
+    if (d.isActive !== undefined) u.is_active = Boolean(d.isActive);
+
+    const { data, error } = await _sb.from('service_providers').update(u)
+      .eq('id', String(id)).select().single();
+    if (error) throw new Error(error.message);
+    return _serviceProviderFromDb(data);
+  },
+
+  async deactivate(id) { return this.update(id, { isActive: false }); },
+  async activate(id)   { return this.update(id, { isActive: true  }); },
 };
 
 
