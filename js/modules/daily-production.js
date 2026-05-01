@@ -382,15 +382,34 @@ async function handleConfirm(id) {
     .map(op => `<option value="${op.id}">${op.name}</option>`)
     .join('');
 
+  // Resolve names so the modal can show what the operator already entered
+  // in CapDispatch (product_id, machine_id, shift) instead of just the
+  // free-text color label.
+  const productName = entry.product_id
+    ? (allProducts.find(p => p.id === entry.product_id)?.name || entry.color || '—')
+    : (entry.color || '—');
+  const machineRecord = entry.machine_id
+    ? allMachines.find(m => m.id === entry.machine_id)
+    : null;
+  const machineName = machineRecord
+    ? (machineRecord.name || machineRecord.code || machineRecord.id)
+    : '—';
+  const shiftLabel = entry.shift || '—';
+
   const modal = document.createElement('div');
   modal.id = 'dp-confirm-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:1000;';
   modal.innerHTML = `
     <div style="background:var(--color-bg-card);border-radius:var(--radius-lg);padding:var(--space-xl);width:min(440px,95vw);box-shadow:0 8px 32px rgba(0,0,0,.6);">
       <h2 style="margin:0 0 var(--space-md);font-family:var(--font-display);font-size:1.1rem;">Confirmar registro</h2>
-      <p style="font-size:.875rem;color:var(--color-text-secondary);margin:0 0 var(--space-lg);">
-        <strong>${entry.operator_name}</strong> &middot; ${entry.color} &middot; ${entry.quantity.toLocaleString('es-DO')} paquetes &middot; ${entry.production_date}
-      </p>
+      <div style="font-size:.85rem;color:var(--color-text-secondary);margin:0 0 var(--space-lg);display:grid;grid-template-columns:auto 1fr;gap:.25rem .75rem;">
+        <span style="color:var(--color-text-muted);">Operario:</span><span><strong>${entry.operator_name}</strong></span>
+        <span style="color:var(--color-text-muted);">Producto:</span><span>${productName}</span>
+        <span style="color:var(--color-text-muted);">Máquina:</span><span>${machineName}</span>
+        <span style="color:var(--color-text-muted);">Turno:</span><span>${shiftLabel}</span>
+        <span style="color:var(--color-text-muted);">Cantidad:</span><span>${entry.quantity.toLocaleString('es-DO')} paquetes</span>
+        <span style="color:var(--color-text-muted);">Fecha:</span><span>${entry.production_date}</span>
+      </div>
       ${needsProduct ? `
         <div class="form-group">
           <label class="form-label">Producto <span style="color:var(--color-danger);">*</span></label>
