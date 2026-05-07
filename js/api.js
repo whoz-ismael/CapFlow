@@ -310,14 +310,26 @@ export const ProductionAPI = {
   },
 
   async create(d) {
-    const row = {
-      ..._productionToDb(d),
-      id:         _genId(),
-      created_at: new Date().toISOString(),
-    };
-    const { data, error } = await _sb.from('production').insert(row).select().single();
+    const row           = _productionToDb(d);
+    const productionId  = _genId();
+    const movementId    = _genId('mov');
+
+    const { data, error } = await _sb.rpc('create_production_with_inventory_credit', {
+      p_production_id:          productionId,
+      p_product_id:             row.product_id,
+      p_movement_id:            movementId,
+      p_quantity:               row.quantity,
+      p_production_date:        row.production_date,
+      p_machine_id:             row.machine_id          ?? null,
+      p_operator_id:            row.operator_id         ?? null,
+      p_shift:                  row.shift               ?? null,
+      p_month:                  row.month               || null,
+      p_operator_rate_snapshot: row.operator_rate_snapshot ?? null,
+      p_extra:                  row.extra               ?? {},
+      p_movement_note:          'Salida de producción',
+    });
     if (error) throw new Error(error.message);
-    return _productionFromDb(data);
+    return _productionFromDb(Array.isArray(data) ? data[0] : data);
   },
 
   async update(id, d) {

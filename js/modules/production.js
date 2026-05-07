@@ -832,19 +832,15 @@ async function handleFormSubmit(e) {
         return;
       }
 
-      // ── Resolve finished-goods inventory item (auto-creates if absent) ───
-      const finishedItemId = await ensureProductInventoryItem(product);
+      // Pre-flight: ensure the product has a linked inventory item (the
+      // server-side RPC requires it). Auto-creates if absent.
+      await ensureProductInventoryItem(product);
 
-      // ── Save the production record ───────────────────────────────────────
-      const newRecord = await ProductionAPI.create(payload);
-
-      // ── Add finished goods stock (no raw-material deductions) ────────────
-      await InventoryAPI.addStock(
-        finishedItemId,
-        payload.quantity,
-        newRecord.id,           // referenceId — links movement to this production record
-        'Salida de producción'  // note
-      );
+      // Atomic create: production row + 'in' inventory movement happen in a
+      // single Postgres transaction. If either fails, neither persists, so
+      // we can never end up with a production record without its inventory
+      // credit.
+      await ProductionAPI.create(payload);
 
       showFeedback('Producción registrada y stock actualizado correctamente.', 'success');
     }
