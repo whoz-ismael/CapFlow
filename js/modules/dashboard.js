@@ -20,6 +20,7 @@ import { OperatorsAPI }        from '../api.js';
 import { MachinesAPI }         from '../api.js';
 import { RawMaterialsAPI }     from '../api.js';
 import { MonthlyInventoryAPI } from '../api.js';
+import { PackageWeightsAPI }   from '../api.js';
 
 // ─── Module State ─────────────────────────────────────────────────────────────
 
@@ -30,6 +31,12 @@ import { MonthlyInventoryAPI } from '../api.js';
  * @type {Chart|null}
  */
 let monthlyChart = null;
+
+/**
+ * Chart.js instance for the daily-average package-weight line chart.
+ * @type {Chart|null}
+ */
+let weightChart = null;
 
 /**
  * The month currently displayed in all KPI cards (YYYY-MM).
@@ -84,6 +91,7 @@ export async function mountDashboard(container) {
       selectedMonth = val;
       showMonthSpinners();
       renderMonth(selectedMonth);
+      renderWeightChartForMonth(selectedMonth);
     });
   }
 
@@ -120,6 +128,9 @@ export async function mountDashboard(container) {
 
     // ── Month row — delegated to renderMonth so it can be re-called on change ─
     renderMonth(selectedMonth);
+
+    // ── Weight chart — independent of the cached production data ────────────
+    renderWeightChartForMonth(selectedMonth);
 
   } catch (err) {
     container.innerHTML = `
@@ -200,6 +211,24 @@ function buildShellHTML() {
         <div class="dashboard-chart-wrap">
           <canvas id="monthly-production-chart" aria-label="Gráfico de producción diaria del mes"></canvas>
         </div>
+      </div>
+
+      <!-- ── Row 1b: Daily-average package weight chart (full-width) ── -->
+      <div class="card" id="dashboard-weight-chart-card">
+        <div class="card__header">
+          <h2 class="card__title" id="dashboard-weight-chart-title">
+            <span class="card__title-icon">⚖</span>
+            Peso por paquete · promedio diario · <span id="dashboard-weight-chart-month">${escapeHTML(thisMonthLabel)}</span>
+          </h2>
+        </div>
+        <div class="dashboard-chart-wrap">
+          <canvas id="monthly-weight-chart" aria-label="Gráfico de peso por paquete promedio diario del mes"></canvas>
+        </div>
+        <p id="dashboard-weight-chart-empty"
+           style="display:none;padding:var(--space-md) var(--space-lg);
+                  color:var(--color-text-muted);font-size:.85rem;text-align:center;">
+          Sin pesajes registrados para este mes.
+        </p>
       </div>
 
       <!-- ── Row 2: Today (static — always shows the actual calendar day) ── -->
@@ -861,6 +890,234 @@ function renderMonthlyChart({ labels, data }) {
       },
     },
   });
+}
+
+// ─── Weight chart (daily averages of package_weights for the selected month) ─
+
+/**
+ * Fetch package weights for the given month and re-render the weight chart.
+ * Updates the inline month label and shows an empty-state message when there
+ * is no data. Failures are swallowed and surfaced inline (the dashboard's
+ * other KPIs must still render even if this section fails).
+ *
+ * @param {string} ym  - 'YYYY-MM'
+ */
+async function renderWeightChartForMonth(ym) {
+  const monthLabelEl = document.getElementById('dashboard-weight-chart-month');
+  if (monthLabelEl) monthLabelEl.textContent = formatMonthLabel(ym);
+
+  const emptyEl  = document.getElementById('dashboard-weight-chart-empty');
+  const canvas   = document.getElementById('monthly-weight-chart');
+  if (!canvas) return;
+
+  let rows = [];
+  try {
+    rows = await PackageWeightsAPI.getByMonth(ym);
+  } catch (err) {
+    console.warn('[CapFlow Dashboard] Error cargando pesos:', err.message);
+  }
+
+  // Group by shift_date → average
+  const byDay = new Map();   // 'YYYY-MM-DD' → { sum, count, items[] }
+  for (const r of rows) {
+    const d = String(r.shift_date).slice(0, 10);
+    const w = Number(r.weight_lbs);
+    if (!Number.isFinite(w)) continue;
+    if (!byDay.has(d)) byDay.set(d, { sum: 0, count: 0, items: [] });
+    const e = byDay.get(d);
+    e.sum   += w;
+    e.count += 1;
+    e.items.push(r);
+  }
+
+  if (byDay.size === 0) {
+    if (weightChart) { weightChart.destroy(); weightChart = null; }
+    canvas.style.display = 'none';
+    if (emptyEl) emptyEl.style.display = 'block';
+    return;
+  }
+  canvas.style.display = '';
+  if (emptyEl) emptyEl.style.display = 'none';
+
+  // Build day axis covering the whole month so gaps are visible
+  const [yy, mm]  = ym.split('-').map(Number);
+  const daysInMonth = new Date(yy, mm, 0).getDate();
+  const labels = [];
+  const data   = [];
+  const detailByLabel = {};
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateStr = `${ym}-${String(day).padStart(2, '0')}`;
+    labels.push(String(day));
+    const e = byDay.get(dateStr);
+    if (e) {
+      data.push(Number((e.sum / e.count).toFixed(3)));
+      detailByLabel[String(day)] = { date: dateStr, items: e.items };
+    } else {
+      data.push(null);
+    }
+  }
+
+  if (typeof window.Chart === 'undefined') {
+    console.warn('[CapFlow Dashboard] Chart.js no cargado — gráfico de peso omitido.');
+    return;
+  }
+
+  if (weightChart) { weightChart.destroy(); weightChart = null; }
+
+  const style       = getComputedStyle(document.documentElement);
+  const accentColor = style.getPropertyValue('--color-accent').trim()       || '#4a9eff';
+  const accentGlow  = style.getPropertyValue('--color-accent-glow').trim()  || 'rgba(74,158,255,0.15)';
+  const borderColor = style.getPropertyValue('--color-border').trim()       || '#252e42';
+  const textMuted   = style.getPropertyValue('--color-text-muted').trim()   || '#4a556b';
+  const textPrimary = style.getPropertyValue('--color-text-primary').trim() || '#dce4f0';
+  const fontDisplay = style.getPropertyValue('--font-display').trim()       || 'sans-serif';
+
+  weightChart = new window.Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label:                'Peso promedio (lb)',
+        data,
+        borderColor:          accentColor,
+        backgroundColor:      accentGlow,
+        borderWidth:          2,
+        tension:              0.25,
+        spanGaps:             false,
+        pointRadius:          ctx => (ctx.raw == null ? 0 : 4),
+        pointHoverRadius:     6,
+        pointBackgroundColor: accentColor,
+        pointBorderColor:     '#1c2333',
+        pointBorderWidth:     1.5,
+        fill:                 true,
+      }],
+    },
+    options: {
+      responsive:          true,
+      maintainAspectRatio: false,
+      onClick: (_evt, items) => {
+        if (!items || items.length === 0) return;
+        const label  = labels[items[0].index];
+        const detail = detailByLabel[label];
+        if (detail) openWeightDayModal(detail.date, detail.items);
+      },
+      onHover: (evt, items) => {
+        const target = evt.native?.target;
+        if (target) target.style.cursor = items.length ? 'pointer' : 'default';
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          enabled: true,
+          callbacks: {
+            title: items => `Día ${items[0].label}`,
+            label: item  => {
+              const detail = detailByLabel[item.label];
+              const n      = detail ? detail.items.length : 0;
+              const avg    = new Intl.NumberFormat('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(item.raw);
+              return ` ${avg} lb · promedio de ${n} pesaje${n === 1 ? '' : 's'}`;
+            },
+          },
+          backgroundColor: '#1c2333',
+          titleColor:      textPrimary,
+          bodyColor:       accentColor,
+          borderColor:     borderColor,
+          borderWidth:     1,
+        },
+      },
+      scales: {
+        x: {
+          title: { display: true, text: 'Día', color: textMuted,
+                   font: { family: fontDisplay, size: 11, weight: '600' } },
+          ticks: { color: textMuted, maxTicksLimit: 31 },
+          grid:  { color: borderColor, drawBorder: false },
+        },
+        y: {
+          title: { display: true, text: 'Peso por paquete (lb)', color: textMuted,
+                   font: { family: fontDisplay, size: 11, weight: '600' } },
+          ticks: { color: textMuted,
+                   callback: v => new Intl.NumberFormat('es-DO', { maximumFractionDigits: 2 }).format(v) },
+          grid:  { color: borderColor, drawBorder: false },
+          beginAtZero: false,
+        },
+      },
+    },
+  });
+}
+
+/**
+ * Open a modal listing every package_weights record for the given day.
+ * Read-only; closes on backdrop click, on the close button, or Escape.
+ *
+ * @param {string} dateStr   - 'YYYY-MM-DD'
+ * @param {Array}  items     - rows from package_weights for that date
+ */
+function openWeightDayModal(dateStr, items) {
+  // Avoid stacking duplicates if a previous modal is still open
+  document.querySelectorAll('.dashboard-weight-day-modal').forEach(el => el.remove());
+
+  const sorted = [...items].sort((a, b) => {
+    const ta = new Date(a.created_at).getTime() || 0;
+    const tb = new Date(b.created_at).getTime() || 0;
+    return ta - tb;
+  });
+  const sum   = sorted.reduce((s, r) => s + (Number(r.weight_lbs) || 0), 0);
+  const avg   = sorted.length ? sum / sorted.length : 0;
+  const fmt   = new Intl.NumberFormat('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const dateD = new Date(`${dateStr}T12:00:00`);
+  const dateLabel = isNaN(dateD)
+    ? dateStr
+    : dateD.toLocaleDateString('es-DO', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+
+  const overlay = document.createElement('div');
+  overlay.className = 'dashboard-weight-day-modal';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:flex;align-items:center;justify-content:center;padding:1rem;';
+  overlay.innerHTML = `
+    <div style="background:var(--color-bg-card);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-xl);width:min(560px,95vw);max-height:85vh;overflow:auto;box-shadow:0 8px 32px rgba(0,0,0,.6);">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-md);margin-bottom:var(--space-md);">
+        <div>
+          <h2 style="margin:0;font-family:var(--font-display);font-size:1.05rem;color:var(--color-text-primary);">Pesajes del día</h2>
+          <p style="margin:.25rem 0 0;color:var(--color-text-muted);font-size:.82rem;">${escapeHTML(dateLabel)}</p>
+        </div>
+        <button id="weight-day-close" class="btn btn--ghost btn--sm" aria-label="Cerrar">✕</button>
+      </div>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:.25rem .75rem;font-size:.82rem;color:var(--color-text-secondary);margin-bottom:var(--space-md);">
+        <span style="color:var(--color-text-muted);">Pesajes:</span><span><strong>${sorted.length}</strong></span>
+        <span style="color:var(--color-text-muted);">Promedio:</span><span><strong>${fmt.format(avg)} lb</strong></span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:.82rem;">
+          <thead>
+            <tr style="border-bottom:1px solid var(--color-border);">
+              <th style="text-align:left;padding:.5rem .25rem;color:var(--color-text-muted);font-weight:600;">Hora</th>
+              <th style="text-align:left;padding:.5rem .25rem;color:var(--color-text-muted);font-weight:600;">Operario</th>
+              <th style="text-align:right;padding:.5rem .25rem;color:var(--color-text-muted);font-weight:600;">Peso (lb)</th>
+              <th style="text-align:left;padding:.5rem .25rem;color:var(--color-text-muted);font-weight:600;">Notas</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${sorted.map(r => {
+              const t = new Date(r.created_at);
+              const hora = isNaN(t) ? '—' : t.toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' });
+              return `
+                <tr style="border-bottom:1px solid var(--color-border);">
+                  <td style="padding:.5rem .25rem;font-family:var(--font-mono);color:var(--color-text-secondary);">${escapeHTML(hora)}</td>
+                  <td style="padding:.5rem .25rem;color:var(--color-text-primary);">${escapeHTML(r.operator_name || '—')}</td>
+                  <td style="padding:.5rem .25rem;text-align:right;font-family:var(--font-mono);color:var(--color-text-primary);">${fmt.format(Number(r.weight_lbs) || 0)}</td>
+                  <td style="padding:.5rem .25rem;color:var(--color-text-muted);">${escapeHTML(r.notes || '—')}</td>
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('#weight-day-close').addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(overlay);
 }
 
 // ─── Scoped CSS ───────────────────────────────────────────────────────────────
