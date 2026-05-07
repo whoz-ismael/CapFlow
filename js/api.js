@@ -380,6 +380,25 @@ export const PackageWeightsAPI = {
     if (error) throw new Error(error.message);
     return data || [];
   },
+
+  async getByMonth(ym) {
+    // ym is 'YYYY-MM'. shift_date is a DATE column; filter by [start, nextMonth).
+    if (!/^\d{4}-\d{2}$/.test(ym)) throw new Error('Mes inválido');
+    const [y, m] = ym.split('-').map(Number);
+    const start  = `${ym}-01`;
+    const nextY  = m === 12 ? y + 1 : y;
+    const nextM  = m === 12 ? 1     : m + 1;
+    const next   = `${nextY}-${String(nextM).padStart(2, '0')}-01`;
+    const { data, error } = await _sb
+      .from('package_weights')
+      .select('id, weight_lbs, operator_name, shift_date, notes, created_at')
+      .gte('shift_date', start)
+      .lt ('shift_date', next)
+      .order('shift_date', { ascending: true })
+      .order('created_at', { ascending: true });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
 };
 
 // =============================================================================
