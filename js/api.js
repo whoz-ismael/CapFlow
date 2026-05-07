@@ -1246,20 +1246,28 @@ function _invMovFromDb(r) {
   };
 }
 
-async function _writeMovement(itemId, type, quantity, referenceId, note) {
-  const row = {
-    id:           _genId('mov'),
-    item_id:      String(itemId),
-    type,
-    quantity,
-    date:         Date.now(),
-    reference_id: referenceId ?? null,
-    note:         (note || '').trim(),
-    created_at:   new Date().toISOString(),
-  };
-  const { error } = await _sb.from('inventory_movements').insert(row);
+/**
+ * Atomically apply an inventory delta and write the corresponding movement
+ * row inside a single Postgres transaction (RPC apply_inventory_movement).
+ * Returns the updated inventory_items row mapped to the JS shape.
+ *
+ * Sign convention preserved by the RPC matches the previous JS code:
+ *   type='in'         → movements.quantity = +abs(delta)
+ *   type='out'        → movements.quantity = -abs(delta)
+ *   type='adjustment' → movements.quantity = signed delta
+ */
+async function _applyMovement(itemId, type, delta, referenceId, note) {
+  const { data, error } = await _sb.rpc('apply_inventory_movement', {
+    p_item_id:       String(itemId),
+    p_delta:         delta,
+    p_movement_type: type,
+    p_movement_id:   _genId('mov'),
+    p_reference_id:  referenceId == null ? null : String(referenceId),
+    p_note:          (note || '').trim(),
+  });
   if (error) throw new Error(error.message);
-  return row;
+  // PostgREST returns the row directly when the function returns a composite.
+  return Array.isArray(data) ? data[0] : data;
 }
 
 export const InventoryAPI = {
@@ -1304,54 +1312,24 @@ export const InventoryAPI = {
   },
 
   async addStock(itemId, quantity, referenceId = null, note = '') {
-    const { data: item, error: e1 } = await _sb.from('inventory_items').select('*')
-      .eq('id', String(itemId)).single();
-    if (e1) throw new Error(e1.message);
     const qty = Number(quantity);
     if (!qty || qty <= 0) throw new Error('La cantidad debe ser mayor que cero.');
-    const newStock = Number(item.stock) + qty;
-    const { data, error } = await _sb.from('inventory_items')
-      .update({ stock: newStock, updated_at: Date.now() })
-      .eq('id', String(itemId)).select().single();
-    if (error) throw new Error(error.message);
-    await _writeMovement(itemId, 'in', qty, referenceId, note);
-    return _invItemFromDb(data);
+    const updated = await _applyMovement(itemId, 'in', qty, referenceId, note);
+    return _invItemFromDb(updated);
   },
 
   async removeStock(itemId, quantity, referenceId = null, note = '') {
-    const { data: item, error: e1 } = await _sb.from('inventory_items').select('*')
-      .eq('id', String(itemId)).single();
-    if (e1) throw new Error(e1.message);
     const qty = Number(quantity);
     if (!qty || qty <= 0) throw new Error('La cantidad debe ser mayor que cero.');
-    if (qty > Number(item.stock)) throw new Error(
-      `Stock insuficiente. Disponible: ${item.stock}, requerido: ${qty}.`
-    );
-    const newStock = Number(item.stock) - qty;
-    const { data, error } = await _sb.from('inventory_items')
-      .update({ stock: newStock, updated_at: Date.now() })
-      .eq('id', String(itemId)).select().single();
-    if (error) throw new Error(error.message);
-    await _writeMovement(itemId, 'out', -qty, referenceId, note);
-    return _invItemFromDb(data);
+    const updated = await _applyMovement(itemId, 'out', -qty, referenceId, note);
+    return _invItemFromDb(updated);
   },
 
   async adjustStock(itemId, quantity, note = '') {
-    const { data: item, error: e1 } = await _sb.from('inventory_items').select('*')
-      .eq('id', String(itemId)).single();
-    if (e1) throw new Error(e1.message);
     const qty = Number(quantity);
     if (qty === 0 || isNaN(qty)) throw new Error('La cantidad de ajuste no puede ser cero.');
-    const newStock = Number(item.stock) + qty;
-    if (newStock < 0) throw new Error(
-      `Ajuste inválido. Stock actual: ${item.stock}, ajuste: ${qty}, resultado: ${newStock}.`
-    );
-    const { data, error } = await _sb.from('inventory_items')
-      .update({ stock: newStock, updated_at: Date.now() })
-      .eq('id', String(itemId)).select().single();
-    if (error) throw new Error(error.message);
-    await _writeMovement(itemId, 'adjustment', qty, null, note);
-    return _invItemFromDb(data);
+    const updated = await _applyMovement(itemId, 'adjustment', qty, null, note);
+    return _invItemFromDb(updated);
   },
 
   async getMovements(itemId) {
