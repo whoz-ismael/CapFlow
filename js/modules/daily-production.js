@@ -435,6 +435,11 @@ async function handleConfirm(id) {
         <label class="form-label">Tarifa del operador (RD$/paquete) <span style="color:var(--color-danger);">*</span></label>
         <input id="dp-confirm-rate" type="number" class="form-input" min="0.01" step="0.01" placeholder="Ej: 0.50"/>
       </div>
+      <div class="form-group">
+        <label class="form-label">Peso por paquete (lb) <span style="color:var(--color-danger);">*</span></label>
+        <input id="dp-confirm-weight" type="number" class="form-input" min="0.01" step="0.01" placeholder="Ej: 13.00"/>
+        <p style="font-size:.75rem;color:var(--color-text-muted);margin:.25rem 0 0;">Peso de 1,000 tapas pesadas en turno matutino. Se guarda como snapshot.</p>
+      </div>
       ${needsOperatorSelect ? `
         <div class="form-group">
           <label class="form-label">Operario CapFlow <span style="color:var(--color-danger);">*</span></label>
@@ -466,6 +471,15 @@ async function handleConfirm(id) {
     const operatorRateSnapshot = Number(modal.querySelector('#dp-confirm-rate')?.value);
     if (!operatorRateSnapshot || operatorRateSnapshot <= 0) {
       errEl.textContent = 'Ingresa una tarifa válida mayor a 0.';
+      errEl.style.display = 'block';
+      return;
+    }
+
+    // Weight per package (snapshot — operators in CapDispatch are not asked
+    // for this when they record production, so the supervisor enters it now)
+    const weightPerPackageSnapshot = Number(modal.querySelector('#dp-confirm-weight')?.value);
+    if (!weightPerPackageSnapshot || weightPerPackageSnapshot <= 0) {
+      errEl.textContent = 'Ingresa un peso por paquete válido mayor a 0.';
       errEl.style.display = 'block';
       return;
     }
@@ -535,7 +549,7 @@ async function handleConfirm(id) {
           quantity:                 entry.quantity,
           productionDate:           entry.production_date,
           operatorRateSnapshot:     operatorRateSnapshot,
-          weightPerPackageSnapshot: 0,
+          weightPerPackageSnapshot: weightPerPackageSnapshot,
         });
       } catch (prodErr) {
         // Production+inventory rolled back by the RPC. Revert the log
