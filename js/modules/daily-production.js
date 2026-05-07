@@ -13,7 +13,6 @@ import {
   MachinesAPI,
   ProductsAPI,
   OperatorsAPI,
-  InventoryAPI,
   ensureProductInventoryItem,
 } from '../api.js';
 
@@ -515,17 +514,20 @@ async function handleConfirm(id) {
 
       const confirmed = await DailyProductionLogsAPI.confirm(id);
 
-      let createdProductionId = null;
       try {
-        // Mirror Producción module: create the production row AND credit
-        // finished-goods inventory. Without the inventory step, the
-        // "Inventario" history loses entradas for confirmed Tapas Diarias.
         const product = allProducts.find(p => p.id === resolvedProductId);
         if (!product || product.type !== 'manufactured') {
           throw new Error('El producto seleccionado no es de tipo "Fabricado".');
         }
 
-        const newProductionRecord = await ProductionAPI.create({
+        // Ensure the product has a linked inventory item; the RPC requires it.
+        await ensureProductInventoryItem(product);
+
+        // Atomic: production row + inventory 'in' movement happen in a
+        // single Postgres transaction. Either both persist or neither
+        // does — a confirmed log can never be left without its inventory
+        // entry.
+        await ProductionAPI.create({
           productId:                resolvedProductId,
           machineId:                resolvedMachineId,
           operatorId:               resolvedOperatorId,
@@ -535,21 +537,9 @@ async function handleConfirm(id) {
           operatorRateSnapshot:     operatorRateSnapshot,
           weightPerPackageSnapshot: 0,
         });
-        createdProductionId = newProductionRecord.id;
-
-        const finishedItemId = await ensureProductInventoryItem(product);
-        await InventoryAPI.addStock(
-          finishedItemId,
-          entry.quantity,
-          newProductionRecord.id,
-          'Salida de producción'
-        );
       } catch (prodErr) {
-        // Roll back: delete the orphan production row (if any) and revert
-        // the log status so the supervisor can try again cleanly.
-        if (createdProductionId) {
-          try { await ProductionAPI.remove(createdProductionId); } catch {}
-        }
+        // Production+inventory rolled back by the RPC. Revert the log
+        // status so the supervisor can try again cleanly.
         await DailyProductionLogsAPI.update(id, { status: 'pending_review', confirmed_at: null });
         throw new Error('Error al crear registro de producción: ' + prodErr.message);
       }
