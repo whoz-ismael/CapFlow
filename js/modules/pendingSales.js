@@ -21,7 +21,6 @@ import {
   SalesAPI,
   CustomersAPI,
   ProductsAPI,
-  InventoryAPI,
   InvestorAPI,
   SalePaymentsAPI,
   ChangeHistoryAPI,
@@ -371,28 +370,33 @@ async function _handleConfirm(saleId) {
   if (rejectBtn) rejectBtn.disabled = true;
 
   try {
-    // 1. Cambiar status a confirmed
-    await SalesAPI.update(saleId, { status: 'confirmed' });
-
-    // 2. Descontar inventario por cada línea manufacturada
+    // 1+2. Cambiar status y descontar inventario en una sola transacción.
+    //
+    // Pre-flight: cada producto manufacturado debe tener un artículo de
+    // inventario vinculado antes de llamar al RPC (el RPC falla si
+    // products.inventory_item_id es null). Si un producto no existe en el
+    // mapa local, fallamos en voz alta — no podemos confirmar a ciegas una
+    // venta cuyas líneas no podemos descontar correctamente.
     const manufacturedLines = (sale.lines || []).filter(
       l => l.productType === 'manufactured'
     );
     for (const line of manufacturedLines) {
       const product = _productMap.get(line.productId);
-      if (!product) continue;
-      try {
-        const itemId = await ensureProductInventoryItem(product);
-        await InventoryAPI.removeStock(
-          itemId,
-          Number(line.quantity),
-          saleId,
-          `Venta despachada confirmada — ${sale.invoiceNumber || saleId}`
-        );
-      } catch (invErr) {
-        console.warn(`[PendingSales] No se pudo descontar inventario para ${line.productId}:`, invErr.message);
+      if (!product) {
+        throw new Error(`Producto no encontrado en la línea: ${line.productId}`);
       }
+      await ensureProductInventoryItem(product);
     }
+
+    // RPC atómico: status → 'confirmed' + débito de stock + inserción de
+    // inventory_movements para cada línea manufacturada, todo en una sola
+    // transacción Postgres. Si algo falla (stock insuficiente, producto sin
+    // inventario vinculado, venta ya confirmada por otra sesión, etc.) nada
+    // se persiste y la venta queda pending_review para reintentar.
+    await SalesAPI.confirmWithInventoryDebit(
+      saleId,
+      `Venta despachada confirmada — ${sale.invoiceNumber || saleId}`
+    );
 
     // 3. Registrar pago (el inversionista nunca paga al momento — queda como cuenta por cobrar)
     if (!sale.isInvestor) {

@@ -868,6 +868,35 @@ export const SalesAPI = {
     if (error) throw new Error(error.message);
     return null;
   },
+
+  /**
+   * Confirm a pending sale and debit finished-goods inventory atomically.
+   * Delegates to the Postgres RPC `confirm_sale_with_inventory_debit`, which
+   * inside one transaction:
+   *   1. Locks the sale row and verifies status='pending_review'.
+   *   2. For every line with productType='manufactured', debits the linked
+   *      inventory item via apply_inventory_movement (stock UPDATE +
+   *      movement INSERT, atomic).
+   *   3. Sets sale.status='confirmed' and updated_at=now().
+   *
+   * If any step fails (insufficient stock, missing product link, status no
+   * longer pending), the entire transaction rolls back: stock unchanged, no
+   * movement rows written, sale stays pending_review. The caller MUST have
+   * called ensureProductInventoryItem(product) for each manufactured line
+   * before invoking this method, otherwise the RPC raises.
+   *
+   * @param {string} saleId
+   * @param {string} note    - movement note used for every debit row
+   * @returns {Promise<Object>} the updated sale (mapped via _saleFromDb)
+   */
+  async confirmWithInventoryDebit(saleId, note = 'Venta despachada confirmada') {
+    const { data, error } = await _sb.rpc('confirm_sale_with_inventory_debit', {
+      p_sale_id: String(saleId),
+      p_note:    note,
+    });
+    if (error) throw new Error(error.message);
+    return _saleFromDb(Array.isArray(data) ? data[0] : data);
+  },
 };
 
 
