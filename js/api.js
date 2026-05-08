@@ -897,6 +897,48 @@ export const SalesAPI = {
     if (error) throw new Error(error.message);
     return _saleFromDb(Array.isArray(data) ? data[0] : data);
   },
+
+  /**
+   * Create a sale and debit finished-goods inventory atomically.
+   * Wraps INSERT into sales + apply_inventory_movement for every manufactured
+   * line in a single Postgres transaction. If any line is invalid (missing
+   * productId, missing inventory link, insufficient stock) the entire
+   * transaction rolls back: no sale row, no movement rows, stock unchanged.
+   *
+   * Caller MUST have run ensureProductInventoryItem(product) for every
+   * manufactured line before invoking this method.
+   *
+   * @param {Object} d    - sale payload (camelCase, same shape as create())
+   * @param {string} note - movement note used for every debit row
+   * @returns {Promise<Object>} the created sale (mapped via _saleFromDb)
+   */
+  async createWithInventoryDebit(d, note = 'Venta') {
+    const saleDate = d.saleDate || '';
+    const totalObj = d.totals || { revenue: 0, cost: 0, profit: 0, margin: 0 };
+    if (d.investor) totalObj.investor = d.investor;
+    const row = {
+      id:             _genId('sale'),
+      sale_date:      saleDate,
+      month:          saleDate.slice(0, 7),
+      client_id:      String(d.clientId || ''),
+      status:         d.status || 'confirmed',
+      notes:          (d.notes || '').trim(),
+      invoice_number: (d.invoiceNumber || '').trim(),
+      totals:         totalObj,
+      attachments:    Array.isArray(d.attachments) ? d.attachments : [],
+      lines:          Array.isArray(d.lines) ? d.lines : [],
+      has_ncf:        d.hasNcf || false,
+      ncf_number:     d.ncfNumber || '',
+      itbis_rate:     Number(d.itbisRate)   || 0,
+      itbis_amount:   Number(d.itbisAmount) || 0,
+    };
+    const { data, error } = await _sb.rpc('create_sale_with_inventory_debit', {
+      p_sale: row,
+      p_note: note,
+    });
+    if (error) throw new Error(error.message);
+    return _saleFromDb(Array.isArray(data) ? data[0] : data);
+  },
 };
 
 

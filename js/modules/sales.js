@@ -1103,15 +1103,21 @@ async function handleFormSubmit(e) {
         return;
       }
 
-      const newSale = await SalesAPI.create(payload);
-
+      // Pre-flight: every manufactured product must have a linked inventory
+      // item before the RPC runs (the RPC raises if the link is missing).
       for (const line of lines) {
         if (line.productType !== 'manufactured') continue;
         const product = productMap.get(String(line.productId));
-        if (!product) continue;
-        const invItemId = await ensureProductInventoryItem(product);
-        await InventoryAPI.removeStock(invItemId, line.quantity, newSale.id, 'Venta');
+        if (!product) throw new Error(`Producto no encontrado: ${line.productId}`);
+        await ensureProductInventoryItem(product);
       }
+
+      // Atomic: INSERT sale + debit inventory for every manufactured line
+      // inside a single Postgres transaction. Failure rolls everything back.
+      const newSale = await SalesAPI.createWithInventoryDebit(
+        payload,
+        `Venta${invoiceNumber ? ' — ' + invoiceNumber : ''}`
+      );
 
       if (investorSale && amortizationTotal > 0) {
         await InvestorAPI.setSaleAmortization(
