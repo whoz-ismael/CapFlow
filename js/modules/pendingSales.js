@@ -301,15 +301,20 @@ function _handleEdit(saleId) {
 
   document.body.appendChild(overlay);
 
-  // Recalculate total on price input change
+  // Recalculate total preview on price change. Uses a delta against the
+  // original totals so investor sales (where totals.revenue is NET of the
+  // per-package investor discounts) keep that net base.
   overlay.querySelectorAll('.ps-line-price').forEach(input => {
     input.addEventListener('input', () => {
-      let revenue = 0;
+      let deltaGross = 0;
       overlay.querySelectorAll('.ps-line-price').forEach((inp, i) => {
-        revenue += Number(inp.value || 0) * Number(sale.lines[i]?.quantity || 0);
+        const oldPrice = Number(sale.lines[i]?.unitPrice ?? sale.lines[i]?.salePricePerUnit ?? 0);
+        const newPrice = Number(inp.value || 0);
+        const qty      = Number(sale.lines[i]?.quantity || 0);
+        deltaGross    += (newPrice - oldPrice) * qty;
       });
       const totalEl = overlay.querySelector('#pse-total');
-      if (totalEl) totalEl.textContent = _fmt(revenue);
+      if (totalEl) totalEl.textContent = _fmt(Math.max(0, (sale.totals?.revenue ?? 0) + deltaGross));
     });
   });
 
@@ -321,22 +326,31 @@ function _handleEdit(saleId) {
     const errEl   = overlay.querySelector('#pse-err');
     errEl.style.display = 'none';
 
-    // Build updated lines with new prices
+    // Build updated lines with new prices. lineRevenue follows CapDispatch
+    // convention (gross = price * qty); investor net is held in totals.revenue.
+    let deltaGross = 0;
     const updatedLines = (sale.lines || []).map((line, i) => {
       const priceInput = overlay.querySelector(`.ps-line-price[data-line-index="${i}"]`);
-      const newPrice   = priceInput ? Number(priceInput.value) : Number(line.unitPrice || line.salePricePerUnit || 0);
-      return { ...line, unitPrice: newPrice, salePricePerUnit: newPrice, lineRevenue: newPrice * Number(line.quantity || 0) };
+      const oldPrice   = Number(line.unitPrice ?? line.salePricePerUnit ?? 0);
+      const newPrice   = priceInput ? Number(priceInput.value) : oldPrice;
+      const qty        = Number(line.quantity || 0);
+      deltaGross += (newPrice - oldPrice) * qty;
+      return { ...line, unitPrice: newPrice, salePricePerUnit: newPrice, lineRevenue: newPrice * qty };
     });
 
-    const newRevenue = updatedLines.reduce((s, l) => s + l.lineRevenue, 0);
-    const oldCost    = sale.totals?.cost ?? 0;
-    const newProfit  = newRevenue - oldCost;
+    // Apply the delta on top of the original totals — works for both investor
+    // sales (totals.revenue is NET) and non-investor sales (NET == GROSS).
+    const oldRevenue = sale.totals?.revenue ?? 0;
+    const oldProfit  = sale.totals?.profit  ?? 0;
+    const newRevenue = Math.max(0, oldRevenue + deltaGross);
+    const newProfit  = oldProfit + deltaGross;
     const newMargin  = newRevenue > 0 ? (newProfit / newRevenue * 100) : 0;
 
     saveBtn.disabled = true; saveBtn.textContent = 'Guardando...';
     try {
+      const clientChoice = overlay.querySelector('#pse-client').value;
       const updated = await SalesAPI.update(saleId, {
-        clientId:      overlay.querySelector('#pse-client').value  || sale.clientId,
+        clientId:      clientChoice !== '' ? clientChoice : sale.clientId,
         saleDate:      overlay.querySelector('#pse-date').value    || sale.saleDate,
         invoiceNumber: overlay.querySelector('#pse-invoice').value,
         paymentMethod: overlay.querySelector('#pse-method').value,
@@ -454,50 +468,88 @@ async function _handleConfirm(saleId) {
 
 // ─── RECHAZAR VENTA ───────────────────────────────────────────────────────────
 
-async function _handleReject(saleId) {
+function _handleReject(saleId) {
   const sale = _pendingSales.find(s => s.id === saleId);
   if (!sale) return;
 
-  const reason = window.prompt(
-    `¿Por qué rechazas la venta ${sale.invoiceNumber || saleId}?\n(opcional — presiona Cancelar para abortar)`
-  );
-  if (reason === null) return;  // el usuario canceló
+  // Styled overlay (replaces window.prompt — consistent with the edit modal
+  // and works in PWA / iframe contexts where prompt() is blocked).
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:flex;align-items:center;justify-content:center;padding:1rem;';
+  overlay.innerHTML = `
+    <div style="background:var(--color-bg-card);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-xl);width:min(440px,100%);box-shadow:0 8px 32px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:var(--space-md);">
+      <h3 style="margin:0;font-size:1rem;font-weight:700;color:var(--color-danger);">
+        ⚠ Rechazar venta — ${_esc(sale.invoiceNumber || saleId)}
+      </h3>
+      <p style="margin:0;font-size:.875rem;color:var(--color-text-muted);">
+        Esta acción marca la venta como rechazada y la retira de la lista pendiente.
+        El registro se conserva como auditoría.
+      </p>
+      <div class="form-group" style="margin:0;">
+        <label class="form-label" for="psr-reason">Motivo (opcional)</label>
+        <textarea id="psr-reason" class="form-input" rows="3" maxlength="200"
+          style="resize:vertical;" placeholder="Ej: precio incorrecto, cliente equivocado…"></textarea>
+      </div>
+      <div id="psr-err" style="display:none;color:var(--color-danger);font-size:.875rem;"></div>
+      <div style="display:flex;gap:var(--space-sm);justify-content:flex-end;">
+        <button id="psr-cancel" class="btn btn--ghost btn--sm">Cancelar</button>
+        <button id="psr-confirm" class="btn btn--danger btn--sm">✕ Rechazar venta</button>
+      </div>
+    </div>`;
 
-  const btn = document.querySelector(`.ps-reject-btn[data-sale-id="${saleId}"]`);
-  const confirmBtn = document.querySelector(`.ps-confirm-btn[data-sale-id="${saleId}"]`);
-  _setBtnLoading(btn, true, 'Rechazando…');
-  if (confirmBtn) confirmBtn.disabled = true;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#psr-reason').focus();
 
-  try {
-    const notes = reason.trim()
-      ? `Rechazado: ${reason.trim()}`
-      : 'Rechazado por administración';
+  const onKey = e => {
+    if (e.key === 'Escape') close();
+  };
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  };
+  overlay.querySelector('#psr-cancel').addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', onKey);
 
-    await SalesAPI.update(saleId, { status: 'rejected', notes });
+  overlay.querySelector('#psr-confirm').addEventListener('click', async () => {
+    const confirmEl = overlay.querySelector('#psr-confirm');
+    const cancelEl  = overlay.querySelector('#psr-cancel');
+    const errEl     = overlay.querySelector('#psr-err');
+    const reason    = overlay.querySelector('#psr-reason').value.trim();
+    const notes     = reason ? `Rechazado: ${reason}` : 'Rechazado por administración';
 
-    const customer = _customerMap.get(sale.clientId);
-    await ChangeHistoryAPI.log({
-      entity_type: 'sale',
-      entity_id:   saleId,
-      entity_name: `${sale.invoiceNumber || saleId} — ${customer?.name ?? sale.clientId}`,
-      action:      'rechazar',
-      changes:     {
-        motivo:     { before: null, after: notes },
-        operario:   { before: null, after: sale.operatorName },
-        despachado: { before: null, after: sale.createdAt },
-      },
-      user_id:   _currentAdmin.id,
-      user_name: _currentAdmin.name,
-    });
+    confirmEl.disabled = true; cancelEl.disabled = true;
+    confirmEl.textContent = 'Rechazando…';
+    errEl.style.display = 'none';
 
-    _showBanner(`Venta ${sale.invoiceNumber || saleId} rechazada.`, 'success');
-    await _loadAll();
+    try {
+      await SalesAPI.update(saleId, { status: 'rejected', notes });
 
-  } catch (err) {
-    _showBanner(`Error al rechazar: ${err.message}`, 'error');
-    _setBtnLoading(btn, false, '✕ Rechazar');
-    if (confirmBtn) confirmBtn.disabled = false;
-  }
+      const customer = _customerMap.get(sale.clientId);
+      await ChangeHistoryAPI.log({
+        entity_type: 'sale',
+        entity_id:   saleId,
+        entity_name: `${sale.invoiceNumber || saleId} — ${customer?.name ?? sale.clientId}`,
+        action:      'rechazar',
+        changes:     {
+          motivo:     { before: null, after: notes },
+          operario:   { before: null, after: sale.operatorName },
+          despachado: { before: null, after: sale.createdAt },
+        },
+        user_id:   _currentAdmin.id,
+        user_name: _currentAdmin.name,
+      });
+
+      close();
+      _showBanner(`Venta ${sale.invoiceNumber || saleId} rechazada.`, 'success');
+      await _loadAll();
+    } catch (err) {
+      errEl.textContent = `Error al rechazar: ${err.message}`;
+      errEl.style.display = 'block';
+      confirmEl.disabled = false; cancelEl.disabled = false;
+      confirmEl.textContent = '✕ Rechazar venta';
+    }
+  });
 }
 
 // ─── HTML BASE ────────────────────────────────────────────────────────────────
