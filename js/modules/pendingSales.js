@@ -116,6 +116,10 @@ function _buildSaleCard(sale) {
   const invoice    = sale.invoiceNumber || '—';
   const isInv      = sale.isInvestor;
 
+  const totalPkgs  = (sale.lines || []).reduce(
+    (sum, l) => sum + Number(l.quantity || 0), 0
+  );
+
   const linesHTML = (sale.lines || []).map(line => {
     const prod    = _productMap.get(line.productId);
     const name    = prod?.name ?? line.productId ?? 'Producto';
@@ -135,6 +139,9 @@ function _buildSaleCard(sale) {
           <span class="badge badge--warning">Pendiente</span>
           ${isInv ? '<span class="badge badge--info">Inversionista</span>' : ''}
           <span class="ps-card__invoice">${_esc(invoice)}</span>
+          <span class="ps-card__qty-pill" title="Total de paquetes">
+            ⬡ <strong>${totalPkgs}</strong> paq.
+          </span>
         </div>
         <div class="ps-card__actions">
           <button class="btn btn--sm btn--ghost ps-edit-btn"
@@ -157,6 +164,10 @@ function _buildSaleCard(sale) {
 
       <div class="ps-card__body">
         <div class="ps-card__info-grid">
+          <div class="ps-card__info-item">
+            <span class="ps-card__info-label">Cantidad</span>
+            <span class="ps-card__info-value">${totalPkgs} paq.</span>
+          </div>
           <div class="ps-card__info-item">
             <span class="ps-card__info-label">Operario</span>
             <span class="ps-card__info-value">${_esc(opName)}</span>
@@ -594,6 +605,15 @@ function _buildShellHTML() {
       }
       .ps-card__meta { display: flex; align-items: center; gap: var(--space-xs); flex-wrap: wrap; }
       .ps-card__invoice { font-family: var(--font-mono); font-size: 0.85rem; color: var(--color-text-muted); }
+      .ps-card__qty-pill {
+        display: inline-flex; align-items: center; gap: 4px;
+        font-size: 0.78rem; padding: 2px 8px; border-radius: 99px;
+        background: color-mix(in srgb, var(--color-primary, #6c63ff) 14%, transparent);
+        color: var(--color-text-primary);
+        border: 1px solid color-mix(in srgb, var(--color-primary, #6c63ff) 35%, transparent);
+        font-family: var(--font-mono);
+      }
+      .ps-card__qty-pill strong { font-weight: 700; }
       .ps-card__actions { display: flex; gap: var(--space-xs); }
       .ps-card__body { display: flex; flex-direction: column; gap: var(--space-sm); }
       .ps-card__info-grid {
