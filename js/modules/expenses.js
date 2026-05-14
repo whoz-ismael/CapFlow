@@ -22,7 +22,12 @@ import {
   InvestorAPI,
   ProvidersAPI,
   ServiceProvidersAPI,
+  ChangeHistoryAPI,
 } from '../api.js';
+import { AuthAPI } from '../auth.js';
+
+/** Usuario admin actual para registrar en el historial. */
+let _currentAdmin = { id: null, name: 'Sistema' };
 
 // --- Constants ---------------------------------------------------------------
 
@@ -92,6 +97,13 @@ let searchQuery     = '';
 export async function mountExpenses(container) {
   container.innerHTML = buildModuleHTML();
   injectStyles();
+  try {
+    const session = await AuthAPI.getSession();
+    _currentAdmin = {
+      id:   session?.user?.id    ?? null,
+      name: session?.user?.email ?? 'Sistema',
+    };
+  } catch { /* anon mode */ }
   attachFormListeners();
   await loadExpenses();
 }
@@ -681,9 +693,28 @@ async function handleFormSubmit(e) {
     if (editingExpense) {
       savedExpense = await ExpensesAPI.update(editingExpense.id, payload);
       showFeedback('Gasto actualizado correctamente.', 'success');
+      const changes = _expenseDiff(editingExpense, payload,
+        ['expenseDate', 'category', 'method', 'amount', 'description', 'notes', 'payableStatus']);
+      ChangeHistoryAPI.log({
+        entity_type: 'expense', entity_id: editingExpense.id,
+        entity_name: payload.description || payload.category || editingExpense.id,
+        action: 'editar', changes,
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+      });
     } else {
       savedExpense = await ExpensesAPI.create(payload);
       showFeedback('Gasto registrado correctamente.', 'success');
+      ChangeHistoryAPI.log({
+        entity_type: 'expense', entity_id: savedExpense?.id ?? '',
+        entity_name: payload.description || payload.category || '',
+        action: 'crear',
+        changes: {
+          category: { before: null, after: payload.category },
+          amount:   { before: null, after: payload.amount },
+          date:     { before: null, after: payload.expenseDate },
+        },
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+      });
     }
 
     // Sync investor debt: reconcile covers create, edit (delta), and removal.
@@ -796,6 +827,17 @@ async function handleDelete(expenseId) {
     await ExpensesAPI.remove(expenseId);
     showFeedback('Gasto eliminado.', 'success');
 
+    ChangeHistoryAPI.log({
+      entity_type: 'expense', entity_id: expenseId,
+      entity_name: expense.description || expense.category || expenseId,
+      action: 'eliminar',
+      changes: {
+        amount:   { before: expense.amount, after: null },
+        category: { before: expense.category, after: null },
+      },
+      user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+    });
+
     if (editingExpense && String(editingExpense.id) === String(expenseId)) {
       resetFormToCreateMode();
     }
@@ -804,6 +846,16 @@ async function handleDelete(expenseId) {
   } catch (err) {
     showFeedback(`Error al eliminar: ${err.message}`, 'error');
   }
+}
+
+function _expenseDiff(original, updated, fields) {
+  const diff = {};
+  for (const f of fields) {
+    if (String(original[f] ?? '') !== String(updated[f] ?? '')) {
+      diff[f] = { before: original[f], after: updated[f] };
+    }
+  }
+  return Object.keys(diff).length > 0 ? diff : null;
 }
 
 function resetFormToCreateMode() {

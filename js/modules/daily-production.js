@@ -13,8 +13,13 @@ import {
   MachinesAPI,
   ProductsAPI,
   OperatorsAPI,
+  ChangeHistoryAPI,
   ensureProductInventoryItem,
 } from '../api.js';
+import { AuthAPI } from '../auth.js';
+
+/** Usuario admin actual para registrar en el historial. */
+let _currentAdmin = { id: null, name: 'Sistema' };
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
@@ -31,6 +36,13 @@ let _container          = null;
 export async function mountDailyProduction(container) {
   _container = container;
   container.innerHTML = buildModuleHTML();
+  try {
+    const session = await AuthAPI.getSession();
+    _currentAdmin = {
+      id:   session?.user?.id    ?? null,
+      name: session?.user?.email ?? 'Sistema',
+    };
+  } catch { /* anon mode */ }
   attachEventListeners();
   await loadData();
 }
@@ -348,6 +360,21 @@ function handleEdit(id) {
         notes:           modal.querySelector('#dp-edit-notes').value.trim(),
       };
       await DailyProductionLogsAPI.update(id, fields);
+
+      const diff = {};
+      ['production_date', 'product_id', 'color', 'shift', 'machine_id', 'quantity', 'notes'].forEach(k => {
+        if (String(entry[k] ?? '') !== String(fields[k] ?? '')) {
+          diff[k] = { before: entry[k], after: fields[k] };
+        }
+      });
+      ChangeHistoryAPI.log({
+        entity_type: 'daily_production', entity_id: id,
+        entity_name: `Producción ${fields.production_date || entry.production_date} — ${entry.operator_name || ''}`,
+        action: 'editar',
+        changes: Object.keys(diff).length ? diff : null,
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+      });
+
       modal.remove();
       await loadData();
       showFeedback('Registro actualizado correctamente.', 'success');
@@ -560,6 +587,23 @@ async function handleConfirm(id) {
 
       const idx = allEntries.findIndex(e => e.id === id);
       if (idx !== -1) allEntries[idx] = confirmed;
+
+      const productLbl = allProducts.find(p => p.id === resolvedProductId)?.name || resolvedProductId || '';
+      ChangeHistoryAPI.log({
+        entity_type: 'daily_production', entity_id: id,
+        entity_name: `Producción ${entry.production_date} — ${entry.operator_name || ''}`,
+        action: 'confirmar',
+        changes: {
+          status:        { before: 'pending_review', after: 'confirmed' },
+          operario:      { before: null, after: entry.operator_name },
+          product_id:    { before: null, after: productLbl },
+          quantity:      { before: null, after: entry.quantity },
+          tarifa:        { before: null, after: operatorRateSnapshot },
+          peso_paquete:  { before: null, after: weightPerPackageSnapshot },
+        },
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+      });
+
       modal.remove();
       await loadData();
       showFeedback('Registro confirmado correctamente.', 'success');
@@ -609,6 +653,16 @@ function handleDelete(id) {
     confirmBtn.textContent = '...';
     try {
       await DailyProductionLogsAPI.remove(id);
+      ChangeHistoryAPI.log({
+        entity_type: 'daily_production', entity_id: id,
+        entity_name: `Producción ${entry.production_date} — ${entry.operator_name || ''}`,
+        action: 'eliminar',
+        changes: {
+          operario: { before: entry.operator_name, after: null },
+          quantity: { before: entry.quantity,      after: null },
+        },
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+      });
       allEntries = allEntries.filter(e => e.id !== id);
       overlay.remove();
       renderTable(allEntries);

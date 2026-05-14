@@ -22,6 +22,11 @@ import { ProductionAPI }                    from '../api.js';
 import { MaterialReceiptsAPI }              from '../api.js';
 import { getMaterialTypeLabel, getMaterialTypeBadge } from '../api.js';
 import { InvestorAPI }                      from '../api.js';
+import { ChangeHistoryAPI }                 from '../api.js';
+import { AuthAPI }                          from '../auth.js';
+
+/** Usuario admin actual para registrar en el historial. */
+let _currentAdmin = { id: null, name: 'Sistema' };
 
 // ─── Module State ─────────────────────────────────────────────────────────────
 
@@ -66,6 +71,13 @@ export async function mountRawMaterials(container) {
   selectedMonth = currentMonthString();
 
   container.innerHTML = buildModuleHTML();
+  try {
+    const session = await AuthAPI.getSession();
+    _currentAdmin = {
+      id:   session?.user?.id    ?? null,
+      name: session?.user?.email ?? 'Sistema',
+    };
+  } catch { /* anon mode */ }
   attachFormListeners();
   attachProviderModalListeners();
   attachInventoryModalListeners();
@@ -1151,6 +1163,22 @@ async function handleFormSubmit(e) {
         await InvestorAPI.addInvestment(fin.amount, noteInv, newRecord.id);
       }
 
+      const provider = allProviders.find(p => String(p.id) === String(payload.supplierId));
+      ChangeHistoryAPI.log({
+        entity_type: 'raw_material',
+        entity_id:   newRecord?.id ?? '',
+        entity_name: `${getMaterialTypeLabel(payload.materialType)} — ${payload.weightLbs} lbs`,
+        action:      'crear',
+        changes: {
+          type:       { before: null, after: getMaterialTypeLabel(payload.materialType) },
+          weight_lbs: { before: null, after: payload.weightLbs },
+          amount:     { before: null, after: payload.totalCost },
+          provider:   { before: null, after: provider?.name ?? '' },
+          date:       { before: null, after: payload.date },
+        },
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+      });
+
       showFeedback('Compra registrada correctamente.', 'success');
     }
 
@@ -1630,6 +1658,21 @@ async function handleConfirmFormSubmit(e) {
       const note      = invNote || `Materia prima (recibo operario): ${typeLabel} — ${date}`;
       await InvestorAPI.addInvestment(invAmount, note, newRecord.id);
     }
+
+    const provider = allProviders.find(p => String(p.id) === String(supplierId));
+    ChangeHistoryAPI.log({
+      entity_type: 'material_receipt',
+      entity_id:   confirmingReceipt.id,
+      entity_name: `${getMaterialTypeLabel(confirmingReceipt.type)} — ${confirmingReceipt.weight_lbs ?? 0} lbs`,
+      action:      'confirmar',
+      changes: {
+        status:     { before: 'pending', after: 'confirmed' },
+        provider:   { before: null,      after: provider?.name ?? '' },
+        amount:     { before: null,      after: cost },
+        operario:   { before: null,      after: confirmingReceipt.operator_name ?? '' },
+      },
+      user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+    });
 
     showFeedback('Entrada confirmada y compra registrada correctamente.', 'success');
     closeConfirmModal();

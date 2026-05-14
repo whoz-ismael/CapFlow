@@ -20,9 +20,13 @@
  * No business logic lives here.
  */
 
-import { CustomersAPI } from '../api.js';
+import { CustomersAPI, ChangeHistoryAPI } from '../api.js';
+import { AuthAPI } from '../auth.js';
 
 // ─── Module State ─────────────────────────────────────────────────────────────
+
+/** Usuario admin actual para registrar en el historial. */
+let _currentAdmin = { id: null, name: 'Sistema' };
 
 /** Holds the customer currently being edited, or null for "create" mode. */
 let editingCustomer = null;
@@ -47,8 +51,15 @@ let activeFilter = 'all';
  * Called by the router in app.js.
  * @param {HTMLElement} container
  */
-export function mountCustomers(container) {
+export async function mountCustomers(container) {
   container.innerHTML = buildModuleHTML();
+  try {
+    const session = await AuthAPI.getSession();
+    _currentAdmin = {
+      id:   session?.user?.id    ?? null,
+      name: session?.user?.email ?? 'Sistema',
+    };
+  } catch { /* anon mode — leave defaults */ }
   attachFormListeners();
   loadCustomers();
 }
@@ -389,9 +400,21 @@ async function handleFormSubmit(e) {
     if (editingCustomer) {
       await CustomersAPI.update(editingCustomer.id, payload);
       showFeedback('Cliente actualizado correctamente.', 'success');
+      const changes = _buildDiff(editingCustomer, payload,
+        ['name', 'type', 'phone', 'email', 'taxId', 'address']);
+      ChangeHistoryAPI.log({
+        entity_type: 'customer', entity_id: editingCustomer.id,
+        entity_name: payload.name, action: 'editar', changes,
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+      });
     } else {
-      await CustomersAPI.create(payload);
+      const result = await CustomersAPI.create(payload);
       showFeedback('Cliente creado correctamente.', 'success');
+      ChangeHistoryAPI.log({
+        entity_type: 'customer', entity_id: result?.id ?? '',
+        entity_name: payload.name, action: 'crear', changes: null,
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+      });
     }
 
     resetFormToCreateMode();
@@ -445,6 +468,7 @@ async function handleToggleStatus(customerId, currentStatus) {
   if (!confirm(`¿Deseas ${verb} este cliente?`)) return;
 
   try {
+    const customer = allCustomers.find(c => String(c.id) === String(customerId));
     if (isActive) {
       await CustomersAPI.softDelete(customerId);
       showFeedback('Cliente desactivado.', 'success');
@@ -452,10 +476,27 @@ async function handleToggleStatus(customerId, currentStatus) {
       await CustomersAPI.reactivate(customerId);
       showFeedback('Cliente activado.', 'success');
     }
+    ChangeHistoryAPI.log({
+      entity_type: 'customer', entity_id: customerId,
+      entity_name: customer?.name ?? '',
+      action: isActive ? 'desactivar' : 'activar',
+      changes: { active: { before: isActive, after: !isActive } },
+      user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+    });
     await loadCustomers();
   } catch (err) {
     showFeedback(`Error al cambiar estado: ${err.message}`, 'error');
   }
+}
+
+function _buildDiff(original, updated, fields) {
+  const diff = {};
+  for (const f of fields) {
+    if (String(original[f] ?? '') !== String(updated[f] ?? '')) {
+      diff[f] = { before: original[f], after: updated[f] };
+    }
+  }
+  return Object.keys(diff).length > 0 ? diff : null;
 }
 
 /** Reset the form back to "create new customer" mode. */

@@ -44,6 +44,11 @@ import { MonthlyInventoryAPI }        from '../api.js';
 import { InvestorAPI }                from '../api.js';
 import { SalePaymentsAPI }            from '../api.js';
 import { nextInvoiceNumber }          from '../api.js';
+import { ChangeHistoryAPI }           from '../api.js';
+import { AuthAPI }                    from '../auth.js';
+
+/** Usuario admin actual para registrar en el historial. */
+let _currentAdmin = { id: null, name: 'Sistema' };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -100,6 +105,13 @@ let searchQuery    = '';
 export async function mountSales(container) {
   container.innerHTML = buildShellHTML();
   injectStyles();
+  try {
+    const session = await AuthAPI.getSession();
+    _currentAdmin = {
+      id:   session?.user?.id    ?? null,
+      name: session?.user?.email ?? 'Sistema',
+    };
+  } catch { /* anon mode */ }
   attachListeners();
   await loadAll();
 }
@@ -1092,6 +1104,19 @@ async function handleFormSubmit(e) {
         );
       }
 
+      const editCustomer = customerMap.get(String(payload.clientId));
+      ChangeHistoryAPI.log({
+        entity_type: 'sale', entity_id: editingSale.id,
+        entity_name: `${invoiceNumber || editingSale.id} — ${editCustomer?.name ?? payload.clientId}`,
+        action: 'editar',
+        changes: {
+          total:          { before: editingSale.totals?.revenue, after: payload.totals?.revenue },
+          client:         { before: customerMap.get(String(editingSale.clientId))?.name ?? null, after: editCustomer?.name ?? null },
+          invoice_number: { before: editingSale.invoiceNumber ?? null, after: invoiceNumber ?? null },
+        },
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+      });
+
       showFeedback('Venta actualizada correctamente.', 'success');
 
     } else {
@@ -1126,6 +1151,20 @@ async function handleFormSubmit(e) {
           `Amortización automática${invoiceNumber ? ' — ' + invoiceNumber : ' — ' + newSale.id}`
         );
       }
+
+      const newCustomer = customerMap.get(String(payload.clientId));
+      ChangeHistoryAPI.log({
+        entity_type: 'sale', entity_id: newSale?.id ?? '',
+        entity_name: `${invoiceNumber || newSale?.id} — ${newCustomer?.name ?? payload.clientId}`,
+        action: 'crear',
+        changes: {
+          invoice_number: { before: null, after: invoiceNumber ?? null },
+          client:         { before: null, after: newCustomer?.name ?? null },
+          total:          { before: null, after: payload.totals?.revenue ?? null },
+          date:           { before: null, after: payload.saleDate ?? null },
+        },
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+      });
     }
 
     if (costMissing) {
@@ -1271,6 +1310,16 @@ function handleDelete(saleId) {
       await SalePaymentsAPI.removeBySaleId(saleId);
 
       await SalesAPI.remove(saleId);
+      ChangeHistoryAPI.log({
+        entity_type: 'sale', entity_id: saleId,
+        entity_name: `${sale.invoiceNumber || saleId} — ${clientLbl}`,
+        action: 'eliminar',
+        changes: {
+          total: { before: sale.totals?.revenue, after: null },
+          date:  { before: sale.saleDate, after: null },
+        },
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+      });
       showFeedback('Venta eliminada y stock restaurado.', 'success');
       await loadAll();
     } catch (err) {

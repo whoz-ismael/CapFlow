@@ -20,10 +20,14 @@
  * No business logic lives here.
  */
 
-import { OperatorsAPI }  from '../api.js';
+import { OperatorsAPI, ChangeHistoryAPI } from '../api.js';
 import { ProductionAPI } from '../api.js';
 import { MachinesAPI }   from '../api.js';
 import { ProductsAPI }   from '../api.js';
+import { AuthAPI }       from '../auth.js';
+
+/** Usuario admin actual para registrar en el historial. */
+let _currentAdmin = { id: null, name: 'Sistema' };
 
 // ─── Module State ─────────────────────────────────────────────────────────────
 
@@ -55,8 +59,15 @@ let productMap = new Map();
  * Called by the router in app.js.
  * @param {HTMLElement} container
  */
-export function mountOperators(container) {
+export async function mountOperators(container) {
   container.innerHTML = buildModuleHTML();
+  try {
+    const session = await AuthAPI.getSession();
+    _currentAdmin = {
+      id:   session?.user?.id    ?? null,
+      name: session?.user?.email ?? 'Sistema',
+    };
+  } catch { /* anon mode */ }
   attachFormListeners();
   loadOperators();
 }
@@ -431,10 +442,22 @@ async function handleFormSubmit(e) {
       // ── Edit mode → update
       await OperatorsAPI.update(editingOperator.id, payload);
       showFeedback('Operario actualizado correctamente.', 'success');
+      const changes = _opDiff(editingOperator, payload,
+        ['name', 'document', 'phone', 'email', 'position', 'isActive']);
+      ChangeHistoryAPI.log({
+        entity_type: 'operator', entity_id: editingOperator.id,
+        entity_name: payload.name, action: 'editar', changes,
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+      });
     } else {
       // ── Create mode → create (always active)
-      await OperatorsAPI.create(payload);
+      const result = await OperatorsAPI.create(payload);
       showFeedback('Operario creado correctamente.', 'success');
+      ChangeHistoryAPI.log({
+        entity_type: 'operator', entity_id: result?.id ?? '',
+        entity_name: payload.name, action: 'crear', changes: null,
+        user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+      });
     }
 
     resetFormToCreateMode();
@@ -499,6 +522,7 @@ async function handleToggleStatus(operatorId, currentlyActive) {
   }
 
   try {
+    const operator = allOperators.find(o => String(o.id) === String(operatorId));
     if (currentlyActive) {
       await OperatorsAPI.deactivate(operatorId);
       showFeedback('Operario desactivado.', 'warning');
@@ -506,6 +530,14 @@ async function handleToggleStatus(operatorId, currentlyActive) {
       await OperatorsAPI.activate(operatorId);
       showFeedback('Operario activado.', 'success');
     }
+
+    ChangeHistoryAPI.log({
+      entity_type: 'operator', entity_id: operatorId,
+      entity_name: operator?.name ?? '',
+      action: currentlyActive ? 'desactivar' : 'activar',
+      changes: { isActive: { before: currentlyActive, after: !currentlyActive } },
+      user_id: _currentAdmin.id, user_name: _currentAdmin.name,
+    });
 
     // If this operator is currently open in the edit form, sync its status field
     if (editingOperator && String(editingOperator.id) === String(operatorId)) {
@@ -518,6 +550,16 @@ async function handleToggleStatus(operatorId, currentlyActive) {
   } catch (err) {
     showFeedback(`Error al cambiar estado: ${err.message}`, 'error');
   }
+}
+
+function _opDiff(original, updated, fields) {
+  const diff = {};
+  for (const f of fields) {
+    if (String(original[f] ?? '') !== String(updated[f] ?? '')) {
+      diff[f] = { before: original[f], after: updated[f] };
+    }
+  }
+  return Object.keys(diff).length > 0 ? diff : null;
 }
 
 /** Reset the form back to "create new operator" mode. */

@@ -2023,11 +2023,16 @@ export const ChangeHistoryAPI = {
    * main user action.
    *
    * @param {Object} entry
-   * @param {string} entry.entity_type  - 'product' | 'machine' | etc.
-   * @param {string} entry.entity_id    - Record ID
-   * @param {string} entry.entity_name  - Human-readable name
-   * @param {string} entry.action       - 'crear' | 'editar' | 'activar' | 'desactivar' | 'eliminar'
-   * @param {Object} [entry.changes]    - { field: { before, after } }
+   * @param {string} entry.entity_type    - 'product' | 'machine' | 'sale' | 'customer' | 'expense' | etc.
+   * @param {string} entry.entity_id      - Record ID
+   * @param {string} entry.entity_name    - Human-readable name
+   * @param {string} entry.action         - 'crear' | 'editar' | 'activar' | 'desactivar' |
+   *                                        'eliminar' | 'confirmar' | 'rechazar' | 'recibir' | etc.
+   * @param {Object} [entry.changes]      - { field: { before, after } }
+   * @param {string} [entry.user_id]
+   * @param {string} [entry.user_name]
+   * @param {string} [entry.source='capflow']  - 'capflow' | 'capdispatch' | 'sistema'
+   * @param {string} [entry.description]  - Mensaje pre-generado opcional.
    */
   async log(entry) {
     try {
@@ -2039,6 +2044,8 @@ export const ChangeHistoryAPI = {
         changes:     entry.changes ?? null,
         user_id:     entry.user_id   ?? null,
         user_name:   entry.user_name ?? null,
+        source:      entry.source      ?? 'capflow',
+        description: entry.description ?? null,
       });
       if (error) console.warn('[CapFlow] Change log error:', error.message);
     } catch (err) {
