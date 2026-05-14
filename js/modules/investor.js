@@ -23,7 +23,7 @@
  * All code identifiers: English
  */
 
-import { InvestorAPI, CustomersAPI } from '../api.js';
+import { InvestorAPI, CustomersAPI, ExpensesAPI } from '../api.js';
 
 // ─── Module State ─────────────────────────────────────────────────────────────
 
@@ -444,7 +444,25 @@ async function handleInvestmentSubmit(e) {
   const btn = document.getElementById('inv-invest-submit-btn');
   setButtonLoading(btn, true);
   try {
+    // Create history entry first (referenceId patched after expense is created).
     investorRecord = await InvestorAPI.addInvestment(amount, note, null, dateTs);
+    const newEntry = investorRecord.history[investorRecord.history.length - 1];
+
+    // Auto-create linked expense so the record exists in the gastos module.
+    const isoDate = new Date(dateTs).toISOString().slice(0, 10);
+    const expense = await ExpensesAPI.create({
+      expenseDate:        isoDate,
+      category:           'Otros gastos',
+      description:        note || 'Gasto registrado desde módulo inversionista',
+      amount,
+      method:             '',
+      isPayable:          false,
+      investorHistoryId:  newEntry.id,
+    });
+
+    // Link the history entry back to the new expense.
+    investorRecord = await InvestorAPI.patchHistoryRef(newEntry.id, expense.id);
+
     document.getElementById('inv-investment-form').reset();
     document.getElementById('inv-invest-date').value = todayISO();
     showFeedback(`Inversión de ${formatCurrency(amount)} registrada.`, 'success');

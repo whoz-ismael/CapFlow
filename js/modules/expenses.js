@@ -68,14 +68,10 @@ const PAYMENT_METHODS = [
 
 const METHOD_LABELS = new Map(PAYMENT_METHODS.map(m => [m.value, m.label]));
 
-const MAX_ATTACH    = 3;
-const MAX_ATTACH_MB = 1.5;
-
 // --- Module State ------------------------------------------------------------
 
 let editingExpense      = null;
 let allExpenses         = [];
-let currentAttachments  = [];
 let investorRecord      = null;
 let allSuppliers        = [];   // active raw-material suppliers (ProvidersAPI)
 let allServiceProviders = [];   // active service providers (ServiceProvidersAPI)
@@ -298,38 +294,15 @@ function buildModuleHTML() {
               <input type="checkbox" id="exp-investor-check">
               <span class="exp-investor-toggle-label">
                 <strong>Financiado por el inversionista</strong>
-                <span class="form-hint" style="margin:0;">El monto se sumará a la deuda del inversionista</span>
+                <span class="form-hint" style="margin:0;">El monto total del gasto se sumar\u00e1 a la deuda del inversionista</span>
               </span>
             </label>
             <div id="exp-investor-fields" style="display:none;" class="form-grid exp-investor-fields">
-              <div class="form-group">
-                <label class="form-label" for="exp-investor-amount">
-                  Monto financiado (RD$) <span class="required">*</span>
-                </label>
-                <input class="form-input" type="number" id="exp-investor-amount"
-                       min="0.01" step="0.01" placeholder="0.00">
-                <span class="form-error" id="exp-investor-error"></span>
-              </div>
-              <div class="form-group">
+              <div class="form-group form-group--wide">
                 <label class="form-label" for="exp-investor-note">Nota (opcional)</label>
                 <input class="form-input" type="text" id="exp-investor-note" maxlength="120"
-                       placeholder="Ej: Préstamo para pago de electricidad">
+                       placeholder="Ej: Pr\u00e9stamo para pago de electricidad">
               </div>
-            </div>
-          </div>
-
-          <!-- Attachments -->
-          <div class="exp-attach-section">
-            <div class="exp-attach-header">
-              <span class="form-label" style="margin:0;">Comprobantes (m\u00e1x. ${MAX_ATTACH}, ${MAX_ATTACH_MB} MB c/u)</span>
-              <label class="btn btn--ghost btn--sm" for="exp-file-input" style="cursor:pointer;">
-                + Adjuntar archivo
-              </label>
-              <input type="file" id="exp-file-input" accept="image/*,application/pdf"
-                     multiple style="display:none;">
-            </div>
-            <div class="exp-attach-list" id="exp-attach-list">
-              <p class="form-hint" style="margin:0;">Sin archivos adjuntos.</p>
             </div>
           </div>
 
@@ -411,7 +384,6 @@ function buildModuleHTML() {
                 <th class="text-right">Monto</th>
                 <th>M\u00e9todo</th>
                 <th>Estado</th>
-                <th class="text-center">Adj.</th>
                 <th class="text-center">Acciones</th>
               </tr>
             </thead>
@@ -502,21 +474,12 @@ function renderTable(expenses) {
     btn.addEventListener('click', () => handleEdit(btn.dataset.id)));
   tbody.querySelectorAll('[data-action="delete"]').forEach(btn =>
     btn.addEventListener('click', () => handleDelete(btn.dataset.id)));
-  tbody.querySelectorAll('[data-action="view-attach"]').forEach(btn =>
-    btn.addEventListener('click', () => {
-      const exp = allExpenses.find(e => String(e.id) === String(btn.dataset.id));
-      if (exp) viewAttachments(exp.attachments || []);
-    }));
+
 }
 
 function buildTableRow(expense) {
-  const attCount    = (expense.attachments || []).length;
-  const attBadge    = attCount > 0
-    ? `<span class="badge badge--blue" style="cursor:pointer;"
-         data-action="view-attach" data-id="${expense.id}">📎 ${attCount}</span>`
-    : '<span style="color:var(--color-text-muted);">—</span>';
-  const invBadge    = expense.investorFinancing
-    ? `<span class="badge badge--orange" style="font-size:0.75rem;" title="Financiado por el inversionista: ${formatCurrency(expense.investorFinancing.amount)}">◈ INV</span>`
+  const invBadge    = expense.investorHistoryId
+    ? '<span class="badge badge--orange" style="font-size:0.75rem;" title="Financiado por el inversionista">◈ INV</span>'
     : '';
 
   // Metodo cell - AP entries have no payment method.
@@ -551,7 +514,6 @@ function buildTableRow(expense) {
       <td class="text-right" style="font-family:var(--font-mono);white-space:nowrap;">${formatCurrency(expense.amount)}</td>
       <td>${methodCell}</td>
       <td>${statusCell}</td>
-      <td class="text-center">${attBadge}</td>
       <td class="text-center td-actions">
         <button class="btn btn--ghost btn--xs" data-action="edit" data-id="${expense.id}"
                 title="Editar gasto">✎ Editar</button>
@@ -593,24 +555,12 @@ function attachFormListeners() {
   document.getElementById('exp-new-service-provider')
     .addEventListener('click', () => openServiceProviderModal());
 
-  // Investor financing checkbox — show/hide amount fields
+  // Investor financing checkbox — show/hide note field
   document.getElementById('exp-investor-check')
     .addEventListener('change', e => {
-      // Mutual exclusion: investor financing cannot coexist with AP mode
       if (e.target.checked) setPayableMode(false);
-      const fields  = document.getElementById('exp-investor-fields');
-      fields.style.display = e.target.checked ? '' : 'none';
-      if (e.target.checked) {
-        // Pre-fill with current expense amount
-        const amt = parseFloat(document.getElementById('exp-field-amount').value) || 0;
-        const amtInput = document.getElementById('exp-investor-amount');
-        if (!amtInput.value) amtInput.value = amt > 0 ? amt : '';
-      }
+      document.getElementById('exp-investor-fields').style.display = e.target.checked ? '' : 'none';
     });
-
-  // File input
-  document.getElementById('exp-file-input')
-    .addEventListener('change', e => handleFileInput(e.target.files));
 
   // Filters
   document.getElementById('exp-filter-from').addEventListener('change', applyFilters);
@@ -635,23 +585,9 @@ async function handleFormSubmit(e) {
     const investorChecked = !isPayable
       && document.getElementById('exp-investor-check')?.checked
       && !!investorRecord;
-    const investorAmount  = investorChecked
-      ? (parseFloat(document.getElementById('exp-investor-amount').value) || 0)
-      : 0;
     const investorNote    = investorChecked
       ? document.getElementById('exp-investor-note').value.trim()
       : '';
-
-    // Validate investor amount when checked
-    if (investorChecked && investorAmount <= 0) {
-      document.getElementById('exp-investor-error').textContent = 'El monto financiado debe ser mayor a 0.';
-      setButtonLoading(submitBtn, false);
-      return;
-    }
-
-    const investorFinancing = investorChecked
-      ? { amount: investorAmount, note: investorNote }
-      : null;
 
     // Collect AP fields and apply rule 4 (paidAmount auto-fills on 'paid';
     // 'partial' requires 0 < paidAmount < amount).
@@ -673,14 +609,12 @@ async function handleFormSubmit(e) {
     }
 
     const payload = {
-      expenseDate:       document.getElementById('exp-field-date').value,
-      category:          document.getElementById('exp-field-category').value,
-      method:            isPayable ? null : document.getElementById('exp-field-method').value,
+      expenseDate:  document.getElementById('exp-field-date').value,
+      category:     document.getElementById('exp-field-category').value,
+      method:       isPayable ? null : document.getElementById('exp-field-method').value,
       amount,
-      description:       document.getElementById('exp-field-description').value.trim(),
-      notes:             document.getElementById('exp-field-notes').value.trim(),
-      attachments:       [...currentAttachments],
-      investorFinancing,
+      description:  document.getElementById('exp-field-description').value.trim(),
+      notes:        document.getElementById('exp-field-notes').value.trim(),
       isPayable,
       creditorType,
       creditorId,
@@ -717,14 +651,32 @@ async function handleFormSubmit(e) {
       });
     }
 
-    // Sync investor debt: reconcile covers create, edit (delta), and removal.
-    // For AP expenses we always reconcile to 0 to make sure any prior linkage
-    // is wiped clean.
-    if (investorRecord) {
-      const expenseId  = savedExpense.id;
-      const targetAmt  = investorFinancing ? investorFinancing.amount : 0;
-      const noteForInv = investorNote || `Gasto: ${payload.description || expenseId}`;
-      await InvestorAPI.reconcileInvestmentByRef(expenseId, targetAmt, noteForInv);
+    // Sync investor history entry: create, update in-place, or delete.
+    if (!isPayable && investorRecord) {
+      const expenseId      = savedExpense.id;
+      const expenseDateTs  = new Date(payload.expenseDate + 'T12:00:00').getTime();
+      const prevHistoryId  = editingExpense?.investorHistoryId ?? null;
+      const note           = investorNote || `Gasto: ${payload.description || expenseId}`;
+
+      if (prevHistoryId && investorChecked) {
+        // Linked before and still linked — update amount, note, date in place.
+        investorRecord = await InvestorAPI.updateInvestmentEntry(prevHistoryId, {
+          amount: amount, note, date: expenseDateTs,
+        });
+      } else if (prevHistoryId && !investorChecked) {
+        // Was linked, now unlinked — delete the history entry and clear the field.
+        investorRecord = await InvestorAPI.deleteInvestmentEntry(prevHistoryId);
+        await ExpensesAPI.update(expenseId, { investorHistoryId: null });
+      } else if (!prevHistoryId && investorChecked) {
+        // New link — create history entry then link both sides.
+        investorRecord = await InvestorAPI.addInvestment(amount, note, expenseId, expenseDateTs);
+        const newEntry = investorRecord.history[investorRecord.history.length - 1];
+        await ExpensesAPI.update(expenseId, { investorHistoryId: newEntry.id });
+      }
+    } else if (isPayable && editingExpense?.investorHistoryId && investorRecord) {
+      // Expense switched to AP mode — remove the investor link.
+      investorRecord = await InvestorAPI.deleteInvestmentEntry(editingExpense.investorHistoryId);
+      await ExpensesAPI.update(savedExpense.id, { investorHistoryId: null });
     }
 
     resetFormToCreateMode();
@@ -742,7 +694,6 @@ function handleEdit(expenseId) {
   if (!expense) return;
 
   editingExpense     = expense;
-  currentAttachments = (expense.attachments || []).map(a => ({ ...a }));
 
   document.getElementById('exp-field-id').value          = expense.id;
   document.getElementById('exp-field-date').value        = expense.expenseDate || '';
@@ -777,17 +728,18 @@ function handleEdit(expenseId) {
   // Populate investor financing fields if applicable
   const invCheck  = document.getElementById('exp-investor-check');
   const invFields = document.getElementById('exp-investor-fields');
-  const invAmt    = document.getElementById('exp-investor-amount');
   const invNote   = document.getElementById('exp-investor-note');
   if (invCheck) {
-    const fin = expense.investorFinancing;
-    invCheck.checked         = !!fin;
-    invFields.style.display  = fin ? '' : 'none';
-    invAmt.value             = fin ? fin.amount : '';
-    invNote.value            = fin ? (fin.note || '') : '';
+    const linked = !!expense.investorHistoryId;
+    invCheck.checked        = linked;
+    invFields.style.display = linked ? '' : 'none';
+    if (linked && invNote) {
+      const entry = investorRecord?.history?.find(e => e.id === expense.investorHistoryId);
+      invNote.value = entry?.note || '';
+    } else if (invNote) {
+      invNote.value = '';
+    }
   }
-
-  renderAttachmentList();
 
   document.getElementById('expenses-form-title').innerHTML =
     '<span class="card__title-icon">\u270e</span> Editar Gasto';
@@ -817,11 +769,9 @@ async function handleDelete(expenseId) {
   if (!confirm(promptText)) return;
 
   try {
-    // Revert investor financing before deleting
-    if (expense.investorFinancing && investorRecord) {
-      await InvestorAPI.reconcileInvestmentByRef(
-        expenseId, 0, `Reversión por eliminación de gasto: ${expense.description || expenseId}`
-      );
+    // Delete linked investor history entry before removing the expense.
+    if (expense.investorHistoryId && investorRecord) {
+      await InvestorAPI.deleteInvestmentEntry(expense.investorHistoryId);
     }
 
     await ExpensesAPI.remove(expenseId);
@@ -860,7 +810,6 @@ function _expenseDiff(original, updated, fields) {
 
 function resetFormToCreateMode() {
   editingExpense     = null;
-  currentAttachments = [];
 
   document.getElementById('expenses-form').reset();
   document.getElementById('exp-field-id').value   = '';
@@ -878,12 +827,11 @@ function resetFormToCreateMode() {
   // Reset investor financing section
   const invCheck  = document.getElementById('exp-investor-check');
   const invFields = document.getElementById('exp-investor-fields');
+  const invNote   = document.getElementById('exp-investor-note');
   if (invCheck)  invCheck.checked        = false;
   if (invFields) invFields.style.display = 'none';
-  const invError = document.getElementById('exp-investor-error');
-  if (invError)  invError.textContent    = '';
+  if (invNote)   invNote.value           = '';
 
-  renderAttachmentList();
   clearFormErrors();
 
   document.getElementById('expenses-form-title').innerHTML =
@@ -891,7 +839,6 @@ function resetFormToCreateMode() {
   document.getElementById('expenses-submit-btn').innerHTML =
     '<span class="btn__icon">\uff0b</span> Registrar Gasto';
   document.getElementById('expenses-cancel-btn').style.display = 'none';
-  document.getElementById('exp-file-input').value = '';
 }
 
 // --- Investor Section ---------------------------------------------------------
@@ -1079,82 +1026,6 @@ function applyFilters() {
   renderTable(results);
 }
 
-// --- Attachment Management ---------------------------------------------------
-
-function handleFileInput(files) {
-  for (const file of files) {
-    if (currentAttachments.length >= MAX_ATTACH) {
-      showFeedback(`M\u00e1ximo ${MAX_ATTACH} archivos por gasto.`, 'warning');
-      break;
-    }
-    if (file.size > MAX_ATTACH_MB * 1024 * 1024) {
-      showFeedback(
-        `"${file.name}" supera ${MAX_ATTACH_MB} MB. Los archivos deben ser peque\u00f1os.`,
-        'warning', 7000
-      );
-      continue;
-    }
-    const reader = new FileReader();
-    reader.onload = ev => {
-      currentAttachments.push({
-        id:      `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        name:    file.name, mime: file.type, size: file.size,
-        dataUrl: ev.target.result,
-      });
-      renderAttachmentList();
-    };
-    reader.readAsDataURL(file);
-  }
-  document.getElementById('exp-file-input').value = '';
-}
-
-function renderAttachmentList() {
-  const container = document.getElementById('exp-attach-list');
-  if (!container) return;
-
-  if (!currentAttachments.length) {
-    container.innerHTML = '<p class="form-hint" style="margin:0;">Sin archivos adjuntos.</p>';
-    return;
-  }
-
-  container.innerHTML = currentAttachments.map(att => `
-    <div class="exp-attach-chip">
-      <span class="exp-attach-icon">${att.mime === 'application/pdf' ? '\ud83d\udcc4' : '\ud83d\uddbc'}</span>
-      <span class="exp-attach-name" title="${escapeHTML(att.name)}">${escapeHTML(att.name)}</span>
-      <span class="exp-attach-size">${formatFileSize(att.size)}</span>
-      <a href="${att.dataUrl}" target="_blank" rel="noopener"
-         class="btn btn--ghost btn--xs">Ver</a>
-      <button type="button" class="btn btn--danger btn--xs exp-attach-remove"
-        data-att-id="${escapeHTML(att.id)}">\u2715</button>
-    </div>
-  `).join('');
-
-  container.querySelectorAll('.exp-attach-remove').forEach(btn => {
-    btn.addEventListener('click', () => {
-      currentAttachments = currentAttachments.filter(a => a.id !== btn.dataset.attId);
-      renderAttachmentList();
-    });
-  });
-}
-
-function viewAttachments(attachments) {
-  if (!attachments.length) return;
-  if (attachments.length === 1) {
-    window.open(attachments[0].dataUrl, '_blank', 'noopener');
-    return;
-  }
-  const win = window.open('', '_blank', 'width=400,height=300,noopener');
-  if (!win) return;
-  const links = attachments.map(a =>
-    `<li style="margin:8px 0;"><a href="${a.dataUrl}" target="_blank"
-       style="font-family:sans-serif;color:#0057b8;">${escapeHTML(a.name)}</a></li>`
-  ).join('');
-  win.document.write(
-    '<html><body style="padding:20px;background:#f8f8f8;">' +
-    '<ul style="list-style:none;padding:0;">' + links + '</ul></body></html>'
-  );
-  win.document.close();
-}
 
 // --- Form Validation ---------------------------------------------------------
 
@@ -1237,12 +1108,6 @@ function formatCurrency(n) {
   }).format(n || 0);
 }
 
-function formatFileSize(bytes) {
-  if (!bytes) return '';
-  return bytes < 1048576
-    ? (bytes / 1024).toFixed(1) + ' KB'
-    : (bytes / 1048576).toFixed(2) + ' MB';
-}
 
 function updateCountBadge(total, filtered = null) {
   const badge = document.getElementById('expenses-count-badge');
@@ -1306,31 +1171,6 @@ function injectStyles() {
       align-items: flex-end;
       padding: 0 var(--space-lg) var(--space-lg);
     }
-
-    .exp-attach-section {
-      border-top: 1px solid var(--color-border);
-      margin-top: var(--space-lg); padding-top: var(--space-lg);
-    }
-    .exp-attach-header {
-      display: flex; align-items: center; gap: var(--space-md);
-      margin-bottom: var(--space-sm);
-    }
-    .exp-attach-list {
-      display: flex; flex-direction: column;
-      gap: var(--space-xs); margin-top: var(--space-sm);
-    }
-    .exp-attach-chip {
-      display: flex; align-items: center; gap: var(--space-sm);
-      padding: var(--space-xs) var(--space-sm);
-      border: 1px solid var(--color-border);
-      border-radius: var(--radius-sm); background: var(--color-bg-surface);
-    }
-    .exp-attach-icon { font-size: 1rem; flex-shrink: 0; }
-    .exp-attach-name {
-      flex: 1; overflow: hidden; text-overflow: ellipsis;
-      white-space: nowrap; font-size: 0.85rem;
-    }
-    .exp-attach-size { font-size: 0.75rem; color: var(--color-text-muted); flex-shrink: 0; }
 
     .exp-investor-section {
       border-top: 1px solid var(--color-border);

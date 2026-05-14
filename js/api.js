@@ -1287,6 +1287,50 @@ export const InvestorAPI = {
     }, 0);
   },
 
+  /** Update an investment-type history entry in place; adjusts totalDebt for the delta. */
+  async updateInvestmentEntry(entryId, { amount, note, date } = {}) {
+    const record = await _investorRead();
+    if (!record) throw new Error('No existe un registro de inversionista.');
+    const entry = record.history.find(e => e.id === entryId);
+    if (!entry) throw new Error(`Entrada de historial no encontrada: ${entryId}`);
+    if (entry.type !== 'investment') throw new Error('Solo entradas de tipo inversión se pueden editar.');
+    if (amount !== undefined) {
+      const newAmt = Number(amount);
+      if (!newAmt || newAmt <= 0) throw new Error('El monto debe ser mayor a cero.');
+      record.totalDebt += (newAmt - entry.amount);
+      entry.amount = newAmt;
+    }
+    if (note !== undefined) entry.note = String(note || '').trim();
+    if (date !== undefined) entry.date = date;
+    await _investorWrite(record);
+    return record;
+  },
+
+  /** Remove an investment-type history entry and subtract its amount from totalDebt. */
+  async deleteInvestmentEntry(entryId) {
+    const record = await _investorRead();
+    if (!record) throw new Error('No existe un registro de inversionista.');
+    const idx = record.history.findIndex(e => e.id === entryId);
+    if (idx === -1) throw new Error(`Entrada de historial no encontrada: ${entryId}`);
+    const entry = record.history[idx];
+    if (entry.type !== 'investment') throw new Error('Solo entradas de tipo inversión se pueden eliminar así.');
+    record.totalDebt -= entry.amount;
+    record.history.splice(idx, 1);
+    await _investorWrite(record);
+    return record;
+  },
+
+  /** Update a history entry's referenceId without changing amounts. */
+  async patchHistoryRef(entryId, referenceId) {
+    const record = await _investorRead();
+    if (!record) throw new Error('No existe un registro de inversionista.');
+    const entry = record.history.find(e => e.id === entryId);
+    if (!entry) throw new Error(`Entrada de historial no encontrada: ${entryId}`);
+    entry.referenceId = referenceId;
+    await _investorWrite(record);
+    return record;
+  },
+
   /**
    * Set the net investment amount linked to a referenceId (expense / raw-material ID).
    * Adds an 'investment' entry if more is needed, or an 'investment_reversal' if less.
@@ -1773,9 +1817,9 @@ export const PayrollAPI = {
 // EXPENSES
 //
 // DB: id, expense_date, category, description, amount, method, notes,
-//     attachments (jsonb), created_at, updated_at
+//     investor_history_id, created_at, updated_at
 // JS: id, expenseDate,  category, description, amount, method, notes,
-//     attachments, createdAt, updatedAt
+//     investorHistoryId, createdAt, updatedAt
 // =============================================================================
 
 function _expenseFromDb(r) {
@@ -1787,8 +1831,7 @@ function _expenseFromDb(r) {
     amount:            Number(r.amount),
     method:            r.method,
     notes:             r.notes,
-    attachments:       Array.isArray(r.attachments) ? r.attachments : [],
-    investorFinancing: r.investor_financing || null,
+    investorHistoryId: r.investor_history_id ?? null,
     isPayable:         r.is_payable === true,
     creditorType:      r.creditor_type ?? null,
     creditorId:        r.creditor_id ?? null,
@@ -1818,23 +1861,22 @@ export const ExpensesAPI = {
     const now       = new Date().toISOString();
     const isPayable = Boolean(d.isPayable);
     const row = {
-      id:                 _genId('exp'),
-      expense_date:       d.expenseDate || d.expense_date || '',
-      category:           d.category || '',
-      description:        d.description || '',
-      amount:             Number(d.amount) || 0,
-      method:             isPayable ? null : (d.method || ''),
-      notes:              d.notes || '',
-      attachments:        Array.isArray(d.attachments) ? d.attachments : [],
-      investor_financing: isPayable ? null : (d.investorFinancing || null),
-      is_payable:         isPayable,
-      creditor_type:      isPayable ? (d.creditorType || null) : null,
-      creditor_id:        isPayable ? (d.creditorId   || null) : null,
-      payable_status:     isPayable ? (d.payableStatus || 'unpaid') : 'unpaid',
-      due_date:           isPayable ? (d.dueDate || null) : null,
-      paid_amount:        isPayable ? (Number(d.paidAmount) || 0) : 0,
-      created_at:         now,
-      updated_at:         now,
+      id:                  _genId('exp'),
+      expense_date:        d.expenseDate || d.expense_date || '',
+      category:            d.category || '',
+      description:         d.description || '',
+      amount:              Number(d.amount) || 0,
+      method:              isPayable ? null : (d.method || ''),
+      notes:               d.notes || '',
+      investor_history_id: isPayable ? null : (d.investorHistoryId || null),
+      is_payable:          isPayable,
+      creditor_type:       isPayable ? (d.creditorType || null) : null,
+      creditor_id:         isPayable ? (d.creditorId   || null) : null,
+      payable_status:      isPayable ? (d.payableStatus || 'unpaid') : 'unpaid',
+      due_date:            isPayable ? (d.dueDate || null) : null,
+      paid_amount:         isPayable ? (Number(d.paidAmount) || 0) : 0,
+      created_at:          now,
+      updated_at:          now,
     };
     const { data, error } = await _sb.from('expenses').insert(row).select().single();
     if (error) throw new Error(error.message);
@@ -1848,22 +1890,19 @@ export const ExpensesAPI = {
     if (d.description        !== undefined) u.description        = d.description;
     if (d.amount             !== undefined) u.amount             = Number(d.amount) || 0;
     if (d.method             !== undefined) u.method             = d.method;
-    if (d.notes              !== undefined) u.notes              = d.notes;
-    if (d.attachments        !== undefined) u.attachments        = d.attachments;
-    if (d.investorFinancing  !== undefined) u.investor_financing = d.investorFinancing;
-    if (d.isPayable          !== undefined) u.is_payable         = Boolean(d.isPayable);
-    if (d.creditorType       !== undefined) u.creditor_type      = d.creditorType   || null;
-    if (d.creditorId         !== undefined) u.creditor_id        = d.creditorId     || null;
-    if (d.payableStatus      !== undefined) u.payable_status     = d.payableStatus  || 'unpaid';
-    if (d.dueDate            !== undefined) u.due_date           = d.dueDate        || null;
-    if (d.paidAmount         !== undefined) u.paid_amount        = Number(d.paidAmount) || 0;
+    if (d.notes              !== undefined) u.notes               = d.notes;
+    if (d.investorHistoryId  !== undefined) u.investor_history_id = d.investorHistoryId || null;
+    if (d.isPayable          !== undefined) u.is_payable          = Boolean(d.isPayable);
+    if (d.creditorType       !== undefined) u.creditor_type       = d.creditorType   || null;
+    if (d.creditorId         !== undefined) u.creditor_id         = d.creditorId     || null;
+    if (d.payableStatus      !== undefined) u.payable_status      = d.payableStatus  || 'unpaid';
+    if (d.dueDate            !== undefined) u.due_date            = d.dueDate        || null;
+    if (d.paidAmount         !== undefined) u.paid_amount         = Number(d.paidAmount) || 0;
 
-    // Enforce mutual exclusion server-side too: when an expense is marked
-    // payable, drop method + investor financing. When unmarked, force AP
-    // fields back to defaults so stale data does not linger.
+    // Enforce mutual exclusion: AP expenses cannot be investor-linked.
     if (d.isPayable === true) {
-      u.method             = null;
-      u.investor_financing = null;
+      u.method              = null;
+      u.investor_history_id = null;
     } else if (d.isPayable === false) {
       u.creditor_type  = null;
       u.creditor_id    = null;
