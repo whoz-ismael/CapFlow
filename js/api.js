@@ -477,43 +477,63 @@ export const ProvidersAPI = {
 function _rawMaterialFromDb(r) {
   const extra = (r.extra && typeof r.extra === 'object') ? r.extra : {};
   return {
-    id:              r.id,
-    materialType:    r.type,
-    type:            r.type,
-    date:            r.purchase_date,
-    purchaseDate:    r.purchase_date,
-    month:           r.month,
-    weightLbs:       Number(r.weight_lbs),
-    totalCost:       Number(r.cost),
-    washedWeightLbs: Number(r.washed_weight_lbs),
-    washingCost:     Number(r.washing_cost),
-    supplierId:      r.provider_id,
-    providerId:      r.provider_id,
-    notes:           r.notes,
+    id:                  r.id,
+    materialType:        r.type,
+    type:                r.type,
+    date:                r.purchase_date,
+    purchaseDate:        r.purchase_date,
+    month:               r.month,
+    weightLbs:           Number(r.weight_lbs),
+    totalCost:           Number(r.cost),
+    washedWeightLbs:     Number(r.washed_weight_lbs),
+    washingCost:         Number(r.washing_cost),
+    supplierId:          r.provider_id,
+    providerId:          r.provider_id,
+    notes:               r.notes,
+    isPayable:           r.is_payable === true,
+    creditorType:        r.creditor_type  ?? null,
+    creditorId:          r.creditor_id    ?? null,
+    payableStatus:       r.payable_status ?? 'unpaid',
+    dueDate:             r.due_date       ?? null,
+    paidAmount:          Number(r.paid_amount ?? 0),
+    investorHistoryId:   r.investor_history_id ?? null,
     ...extra,
-    createdAt:       r.created_at,
-    updatedAt:       r.updated_at,
+    createdAt:           r.created_at,
+    updatedAt:           r.updated_at,
   };
 }
 
 const _rmSkipKeys = new Set([
   'id', 'materialType', 'type', 'date', 'purchaseDate', 'month',
   'weightLbs', 'totalCost', 'cost', 'washedWeightLbs', 'washingCost',
-  'supplierId', 'providerId', 'notes', 'createdAt', 'updatedAt', 'extra',
+  'supplierId', 'providerId', 'notes',
+  'isPayable', 'creditorType', 'creditorId', 'payableStatus', 'dueDate',
+  'paidAmount', 'investorHistoryId',
+  // legacy extra key — no longer persisted; reads via spread above still work
+  'investorFinancing',
+  'createdAt', 'updatedAt', 'extra',
 ]);
 
 function _rawMaterialToDb(d) {
   const purchaseDate = d.date || d.purchaseDate || '';
+  const isPayable    = Boolean(d.isPayable);
   const row = {
-    type:              d.materialType || d.type || '',
-    purchase_date:     purchaseDate,
-    month:             d.month || purchaseDate.slice(0, 7),
-    weight_lbs:        Number(d.weightLbs) || 0,
-    cost:              Number(d.totalCost ?? d.cost) || 0,
-    washed_weight_lbs: Number(d.washedWeightLbs) || 0,
-    washing_cost:      Number(d.washingCost) || 0,
-    provider_id:       d.supplierId || d.providerId || '',
-    notes:             d.notes || '',
+    type:                d.materialType || d.type || '',
+    purchase_date:       purchaseDate,
+    month:               d.month || purchaseDate.slice(0, 7),
+    weight_lbs:          Number(d.weightLbs) || 0,
+    cost:                Number(d.totalCost ?? d.cost) || 0,
+    washed_weight_lbs:   Number(d.washedWeightLbs) || 0,
+    washing_cost:        Number(d.washingCost) || 0,
+    provider_id:         d.supplierId || d.providerId || '',
+    notes:               d.notes || '',
+    is_payable:          isPayable,
+    creditor_type:       isPayable ? (d.creditorType  || null) : null,
+    creditor_id:         isPayable ? (d.creditorId    || null) : null,
+    payable_status:      isPayable ? (d.payableStatus || 'unpaid') : 'unpaid',
+    due_date:            isPayable ? (d.dueDate       || null) : null,
+    paid_amount:         isPayable ? (Number(d.paidAmount) || 0) : 0,
+    investor_history_id: isPayable ? null : (d.investorHistoryId || null),
   };
   const extra = {};
   for (const [k, v] of Object.entries(d)) {
@@ -531,6 +551,9 @@ export const RawMaterialsAPI = {
   },
 
   async create(d) {
+    if (d.isPayable && d.investorHistoryId) {
+      throw new Error('Una compra no puede ser cuenta por pagar e inversión al mismo tiempo.');
+    }
     const row = {
       ..._rawMaterialToDb(d),
       id:         _genId(),
@@ -542,6 +565,9 @@ export const RawMaterialsAPI = {
   },
 
   async update(id, d) {
+    if (d.isPayable && d.investorHistoryId) {
+      throw new Error('Una compra no puede ser cuenta por pagar e inversión al mismo tiempo.');
+    }
     const u = { ..._rawMaterialToDb(d), updated_at: new Date().toISOString() };
     const { data, error } = await _sb.from('raw_materials').update(u)
       .eq('id', String(id)).select().single();

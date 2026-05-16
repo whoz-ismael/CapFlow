@@ -17,6 +17,7 @@
 
 import { RawMaterialsAPI }                  from '../api.js';
 import { ProvidersAPI }                     from '../api.js';
+import { ServiceProvidersAPI }              from '../api.js';
 import { MonthlyInventoryAPI }              from '../api.js';
 import { ProductionAPI }                    from '../api.js';
 import { MaterialReceiptsAPI }              from '../api.js';
@@ -60,6 +61,11 @@ let selectedMonth = '';
 /** Cached investor record — used to show/hide financing section. */
 let investorRecord = null;
 
+/** In-memory cache of all service providers — used for the AP creditor dropdown. */
+let allServiceProviders = [];
+
+const RM_PAYABLE_STATUS_LABELS = { unpaid: 'Pendiente', partial: 'Parcial', paid: 'Pagado' };
+
 // ─── Entry Point ──────────────────────────────────────────────────────────────
 
 /**
@@ -97,9 +103,10 @@ async function loadAll() {
   showTableLoading(true);
 
   try {
-    [allRecords, allProviders, allInventoryRecords, allProductionRecords, allPendingReceipts, investorRecord] = await Promise.all([
+    [allRecords, allProviders, allServiceProviders, allInventoryRecords, allProductionRecords, allPendingReceipts, investorRecord] = await Promise.all([
       RawMaterialsAPI.getAll(),
       ProvidersAPI.getAll(),
+      ServiceProvidersAPI.getAll().catch(() => []),
       MonthlyInventoryAPI.getAll(),
       ProductionAPI.getAll(),
       MaterialReceiptsAPI.getPending(),
@@ -114,6 +121,7 @@ async function loadAll() {
 
     // Repopulate supplier dropdown with active providers only
     populateProviderSelect();
+    populateCreditorDropdown();
 
     // Render pending receipts section
     renderPendingReceipts();
@@ -405,25 +413,86 @@ function buildModuleHTML() {
             </div>
           </div>
 
+          <!-- Accounts Payable toggle (Cuenta por Pagar / Crédito) -->
+          <label class="exp-payable-toggle">
+            <input type="checkbox" id="rm-payable-check">
+            <span class="exp-payable-toggle-label">
+              <strong>Es cuenta por pagar (Crédito)</strong>
+              <span class="form-hint" style="margin:0;">
+                Marca esta compra como pendiente de pago. Se desactiva el financiamiento del inversionista.
+              </span>
+            </span>
+          </label>
+
+          <!-- Accounts Payable details (shown only when AP toggle is checked) -->
+          <div class="exp-payable-section" id="rm-payable-section" style="display:none;">
+            <div class="form-grid">
+              <div class="form-group form-group--wide">
+                <label class="form-label">
+                  Tipo de acreedor <span class="required">*</span>
+                </label>
+                <div class="exp-creditor-type">
+                  <label class="exp-radio">
+                    <input type="radio" name="rm-creditor-type" id="rm-creditor-type-supplier"
+                           value="supplier" checked>
+                    <span>Proveedor de materia prima</span>
+                  </label>
+                  <label class="exp-radio">
+                    <input type="radio" name="rm-creditor-type" id="rm-creditor-type-service"
+                           value="service_provider">
+                    <span>Proveedor de servicios</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-group form-group--wide">
+                <label class="form-label" for="rm-creditor-id">
+                  Acreedor <span class="required">*</span>
+                </label>
+                <div class="select-wrapper">
+                  <select class="form-input form-select" id="rm-creditor-id">
+                    <option value="" disabled selected>Seleccionar…</option>
+                  </select>
+                </div>
+                <span class="form-error" id="rm-error-creditor"></span>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="rm-due-date">Fecha límite (opcional)</label>
+                <input class="form-input" type="date" id="rm-due-date">
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="rm-payable-status">Estado de pago</label>
+                <div class="select-wrapper">
+                  <select class="form-input form-select" id="rm-payable-status">
+                    <option value="unpaid" selected>Pendiente</option>
+                    <option value="partial">Parcial</option>
+                    <option value="paid">Pagado</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-group" id="rm-paid-amount-group" style="display:none;">
+                <label class="form-label" for="rm-paid-amount">Monto pagado (RD$)</label>
+                <input class="form-input" type="number" id="rm-paid-amount"
+                       min="0" step="0.01" placeholder="0.00">
+                <span class="form-error" id="rm-error-paid-amount"></span>
+              </div>
+            </div>
+          </div>
+
           <!-- Investor Financing (shown only when an investor record exists) -->
           <div class="rm-investor-section" id="rm-investor-section" style="display:none;">
             <label class="rm-investor-toggle">
               <input type="checkbox" id="rm-investor-check">
               <span class="rm-investor-toggle-label">
                 <strong>Financiado por el inversionista</strong>
-                <span class="form-hint" style="margin:0;">El monto se sumará a la deuda del inversionista</span>
+                <span class="form-hint" style="margin:0;">El monto total de la compra se sumará a la deuda del inversionista</span>
               </span>
             </label>
             <div id="rm-investor-fields" style="display:none;" class="form-grid rm-investor-fields">
-              <div class="form-group">
-                <label class="form-label" for="rm-investor-amount">
-                  Monto financiado (RD$) <span class="required">*</span>
-                </label>
-                <input class="form-input" type="number" id="rm-investor-amount"
-                       min="0.01" step="0.01" placeholder="0.00">
-                <span class="form-error" id="rm-investor-error"></span>
-              </div>
-              <div class="form-group">
+              <div class="form-group form-group--wide">
                 <label class="form-label" for="rm-investor-note">Nota (opcional)</label>
                 <input class="form-input" type="text" id="rm-investor-note" maxlength="120"
                        placeholder="Ej: Préstamo para compra de material reciclado">
@@ -537,9 +606,13 @@ function buildTableRow(r) {
     supplierDisplay = escapeHTML(provider.name);
   }
 
-  const invBadge = r.investorFinancing
-    ? `<span class="badge badge--orange" style="font-size:0.7rem;padding:2px 6px;"
-         title="Financiado por el inversionista: ${formatCurrency(r.investorFinancing.amount)}">◈ INV</span>`
+  const invBadge = r.investorHistoryId
+    ? '<span class="badge badge--orange" style="font-size:0.7rem;padding:2px 6px;" title="Financiado por el inversionista">◈ INV</span>'
+    : '';
+  const apBadgeClass = r.payableStatus === 'paid'
+    ? 'badge--green' : r.payableStatus === 'partial' ? 'badge--blue' : 'badge--warning';
+  const apBadge = r.isPayable
+    ? `<span class="badge ${apBadgeClass}" style="font-size:0.7rem;padding:2px 6px;" title="${RM_PAYABLE_STATUS_LABELS[r.payableStatus] || 'CxP'}">⊙ CxP</span>`
     : '';
 
   return `
@@ -547,7 +620,7 @@ function buildTableRow(r) {
       <td class="td-date" style="font-family:var(--font-mono);font-size:0.82rem;white-space:nowrap;">
         ${escapeHTML(formatDateDisplay(r.date))}
       </td>
-      <td><span class="badge ${typeBadge}">${typeLabel}</span>${invBadge ? ' ' + invBadge : ''}</td>
+      <td><span class="badge ${typeBadge}">${typeLabel}</span>${invBadge ? ' ' + invBadge : ''}${apBadge ? ' ' + apBadge : ''}</td>
       <td>${supplierDisplay}</td>
       <td class="text-right" style="font-family:var(--font-mono);">
         ${formatNumber(r.weightLbs)}
@@ -578,7 +651,8 @@ function buildTableRow(r) {
 function renderInvestorSection() {
   const section = document.getElementById('rm-investor-section');
   if (!section) return;
-  section.style.display = investorRecord ? '' : 'none';
+  const apOn = document.getElementById('rm-payable-check')?.checked === true;
+  section.style.display = (investorRecord && !apOn) ? '' : 'none';
 }
 
 // ─── Pending Receipts ─────────────────────────────────────────────────────────
@@ -1094,18 +1168,89 @@ function attachFormListeners() {
     renderMonthlySummary();
   });
 
-  // Investor financing checkbox — show/hide amount fields
+  // AP toggle — show/hide AP section; mutually exclusive with investor
+  document.getElementById('rm-payable-check')
+    ?.addEventListener('change', e => setPayableMode(e.target.checked));
+
+  // Creditor type radios — repopulate the acreedor dropdown
+  document.querySelectorAll('input[name="rm-creditor-type"]').forEach(r => {
+    r.addEventListener('change', () => populateCreditorDropdown());
+  });
+
+  // Payable status — show/hide paid amount field
+  document.getElementById('rm-payable-status')
+    ?.addEventListener('change', e => updatePaidAmountVisibility(e.target.value));
+
+  // Investor checkbox — show/hide note field; mutually exclusive with AP
   document.getElementById('rm-investor-check')
     ?.addEventListener('change', e => {
+      if (e.target.checked) setPayableMode(false);
       const fields = document.getElementById('rm-investor-fields');
       if (fields) fields.style.display = e.target.checked ? '' : 'none';
-      if (e.target.checked) {
-        // Pre-fill with current total cost
-        const cost = parseFloat(document.getElementById('rm-field-cost').value) || 0;
-        const amtInput = document.getElementById('rm-investor-amount');
-        if (amtInput && !amtInput.value) amtInput.value = cost > 0 ? cost : '';
-      }
     });
+}
+
+/** Toggle the AP section and investor section (mutually exclusive). */
+function setPayableMode(on) {
+  const apSection     = document.getElementById('rm-payable-section');
+  const investorSect  = document.getElementById('rm-investor-section');
+  const investorCheck = document.getElementById('rm-investor-check');
+  const investorFields = document.getElementById('rm-investor-fields');
+  const payableCheck  = document.getElementById('rm-payable-check');
+
+  if (payableCheck && payableCheck.checked !== on) payableCheck.checked = on;
+  if (apSection)  apSection.style.display = on ? '' : 'none';
+
+  if (on) {
+    // Mutual exclusion: clear and hide investor financing
+    if (investorCheck)  investorCheck.checked        = false;
+    if (investorFields) investorFields.style.display = 'none';
+    if (investorSect)   investorSect.style.display   = 'none';
+    populateCreditorDropdown();
+    updatePaidAmountVisibility(document.getElementById('rm-payable-status')?.value || 'unpaid');
+  } else if (investorRecord && investorSect) {
+    investorSect.style.display = '';
+  }
+}
+
+/** Populate the acreedor dropdown based on the current creditor-type radio. */
+function populateCreditorDropdown(preselectId = '') {
+  const sel  = document.getElementById('rm-creditor-id');
+  if (!sel) return;
+  const type = document.querySelector('input[name="rm-creditor-type"]:checked')?.value || 'supplier';
+  const list = type === 'service_provider'
+    ? (allServiceProviders || []).filter(p => p.isActive !== false)
+    : allProviders.filter(p => p.isActive !== false);
+  const placeholder = list.length === 0
+    ? (type === 'service_provider'
+        ? 'No hay proveedores de servicios'
+        : 'No hay proveedores de materia prima activos')
+    : 'Seleccionar…';
+  sel.innerHTML =
+    `<option value="" disabled ${preselectId ? '' : 'selected'}>${placeholder}</option>` +
+    list.map(p =>
+      `<option value="${p.id}" ${String(p.id) === String(preselectId) ? 'selected' : ''}>${p.name}</option>`
+    ).join('');
+}
+
+/** Show the paid-amount input only for partial / paid statuses. */
+function updatePaidAmountVisibility(status) {
+  const group = document.getElementById('rm-paid-amount-group');
+  const input = document.getElementById('rm-paid-amount');
+  if (!group || !input) return;
+  if (status === 'partial' || status === 'paid') {
+    group.style.display = '';
+    if (status === 'paid') {
+      const cost = parseFloat(document.getElementById('rm-field-cost').value) || 0;
+      input.value = cost;
+      input.readOnly = true;
+    } else {
+      input.readOnly = false;
+    }
+  } else {
+    group.style.display = 'none';
+    input.value = '';
+  }
 }
 
 /** Show or hide the washing fields based on the current material type. */
@@ -1147,20 +1292,15 @@ async function handleFormSubmit(e) {
       resetFormToCreateMode();
       return;
     } else {
-      // Validate investor financing amount before saving
-      if (payload.investorFinancing && payload.investorFinancing.amount <= 0) {
-        document.getElementById('rm-investor-error').textContent = 'El monto financiado debe ser mayor a 0.';
-        setButtonLoading(submitBtn, false);
-        return;
-      }
-
       const newRecord = await RawMaterialsAPI.create(payload);
 
-      // Record investor financing in the investor's history
-      if (payload.investorFinancing && investorRecord) {
-        const fin     = payload.investorFinancing;
-        const noteInv = fin.note || `Materia prima: ${getMaterialTypeLabel(payload.materialType)} — ${payload.date}`;
-        await InvestorAPI.addInvestment(fin.amount, noteInv, newRecord.id);
+      // Sync investor history entry (bidirectional link via investor_history_id)
+      if (payload.investorChecked && investorRecord) {
+        const dateTs  = new Date(payload.date + 'T12:00:00').getTime();
+        const noteInv = payload.investorNote || `Materia prima: ${getMaterialTypeLabel(payload.materialType)} — ${payload.date}`;
+        investorRecord = await InvestorAPI.addInvestment(payload.totalCost, noteInv, newRecord.id, dateTs);
+        const newEntry = investorRecord.history[investorRecord.history.length - 1];
+        await RawMaterialsAPI.update(newRecord.id, { ...payload, investorHistoryId: newEntry.id });
       }
 
       const provider = allProviders.find(p => String(p.id) === String(payload.supplierId));
@@ -1263,13 +1403,24 @@ function resetFormToCreateMode() {
     '<span class="btn__icon">＋</span> Guardar Compra';
   document.getElementById('rm-cancel-btn').style.display = 'none';
 
+  // Reset AP section
+  setPayableMode(false);
+  const credSel = document.getElementById('rm-creditor-id');
+  if (credSel) credSel.innerHTML = '<option value="" disabled selected>Seleccionar\u2026</option>';
+  const dueDate = document.getElementById('rm-due-date');
+  if (dueDate) dueDate.value = '';
+  const payStat = document.getElementById('rm-payable-status');
+  if (payStat) payStat.value = 'unpaid';
+  const paidAmt = document.getElementById('rm-paid-amount');
+  if (paidAmt) paidAmt.value = '';
+
   // Reset investor financing section
   const invCheck  = document.getElementById('rm-investor-check');
   const invFields = document.getElementById('rm-investor-fields');
+  const invNote   = document.getElementById('rm-investor-note');
   if (invCheck)  invCheck.checked        = false;
   if (invFields) invFields.style.display = 'none';
-  const invError = document.getElementById('rm-investor-error');
-  if (invError)  invError.textContent    = '';
+  if (invNote)   invNote.value           = '';
 
   clearFormErrors();
 }
@@ -1407,18 +1558,10 @@ function ensureConfirmModalInDOM() {
                 <input type="checkbox" id="rm-confirm-investor-check">
                 <span class="rm-investor-toggle-label">
                   <strong>Financiado por el inversionista</strong>
-                  <span class="form-hint" style="margin:0;">El monto se sumará a la deuda del inversionista</span>
+                  <span class="form-hint" style="margin:0;">El monto total de la compra se sumará a la deuda del inversionista</span>
                 </span>
               </label>
               <div id="rm-confirm-investor-fields" style="display:none;" class="rm-investor-fields" style="margin-top:var(--space-md);">
-                <div class="form-group">
-                  <label class="form-label" for="rm-confirm-investor-amount">
-                    Monto financiado (RD$) <span class="required">*</span>
-                  </label>
-                  <input class="form-input" type="number" id="rm-confirm-investor-amount"
-                         min="0.01" step="0.01" placeholder="0.00">
-                  <span class="form-error" id="rm-confirm-investor-error"></span>
-                </div>
                 <div class="form-group">
                   <label class="form-label" for="rm-confirm-investor-note">Nota (opcional)</label>
                   <input class="form-input" type="text" id="rm-confirm-investor-note" maxlength="120"
@@ -1497,11 +1640,6 @@ function _onConfirmModalEscape(e) {
 function _onConfirmInvestorCheckChange(e) {
   const fields = document.getElementById('rm-confirm-investor-fields');
   if (fields) fields.style.display = e.target.checked ? '' : 'none';
-  if (e.target.checked) {
-    const cost = parseFloat(document.getElementById('rm-confirm-cost').value) || 0;
-    const amtInput = document.getElementById('rm-confirm-investor-amount');
-    if (amtInput && !amtInput.value) amtInput.value = cost > 0 ? cost : '';
-  }
 }
 
 /**
@@ -1621,20 +1759,10 @@ async function handleConfirmFormSubmit(e) {
   setButtonLoading(saveBtn, true);
 
   // Read investor financing fields
-  const invChecked    = document.getElementById('rm-confirm-investor-check')?.checked && investorRecord;
-  const invAmount     = invChecked
-    ? (parseFloat(document.getElementById('rm-confirm-investor-amount').value) || 0)
-    : 0;
-  const invNote       = invChecked
+  const invChecked = document.getElementById('rm-confirm-investor-check')?.checked && !!investorRecord;
+  const invNote    = invChecked
     ? (document.getElementById('rm-confirm-investor-note').value.trim())
     : '';
-
-  if (invChecked && invAmount <= 0) {
-    const errEl = document.getElementById('rm-confirm-investor-error');
-    if (errEl) errEl.textContent = 'El monto financiado debe ser mayor a 0.';
-    showFeedback('Verifica el monto de financiamiento del inversionista.', 'error');
-    return;
-  }
 
   try {
     const newRecord = await MaterialReceiptsAPI.confirm(
@@ -1652,11 +1780,14 @@ async function handleConfirmFormSubmit(e) {
       confirmingReceipt
     );
 
-    // Record investor financing in the investor's history
-    if (invChecked && invAmount > 0) {
+    // Sync investor history entry (bidirectional link)
+    if (invChecked) {
       const typeLabel = getMaterialTypeLabel(confirmingReceipt.type);
       const note      = invNote || `Materia prima (recibo operario): ${typeLabel} — ${date}`;
-      await InvestorAPI.addInvestment(invAmount, note, newRecord.id);
+      const dateTs    = new Date(date + 'T12:00:00').getTime();
+      investorRecord  = await InvestorAPI.addInvestment(cost, note, newRecord.id, dateTs);
+      const newEntry  = investorRecord.history[investorRecord.history.length - 1];
+      await RawMaterialsAPI.update(newRecord.id, { investorHistoryId: newEntry.id });
     }
 
     const provider = allProviders.find(p => String(p.id) === String(supplierId));
@@ -2257,6 +2388,23 @@ function validateForm() {
     errors.push('peso lavado');
   }
 
+  // AP fields
+  const isPayable = document.getElementById('rm-payable-check')?.checked === true;
+  if (isPayable) {
+    const creditorId = document.getElementById('rm-creditor-id')?.value;
+    if (!creditorId) {
+      showFieldError('rm-error-creditor', 'Selecciona un acreedor.');
+      errors.push('acreedor');
+    }
+    const status    = document.getElementById('rm-payable-status')?.value || 'unpaid';
+    const totalCost = parseFloat(document.getElementById('rm-field-cost').value) || 0;
+    const paid      = parseFloat(document.getElementById('rm-paid-amount')?.value) || 0;
+    if (status === 'partial' && (paid <= 0 || paid >= totalCost)) {
+      showFieldError('rm-error-paid-amount', 'El monto parcial debe ser mayor a 0 y menor al costo total.');
+      errors.push('monto pagado');
+    }
+  }
+
   if (errors.length > 0) {
     showFeedback(
       `Verifica los campos obligatorios: ${errors.join(', ')}.`,
@@ -2322,21 +2470,38 @@ function showFieldError(errorId, message) {
 function collectFormData() {
   const type       = document.getElementById('rm-field-type').value;
   const isRecycled = type === 'recycled';
+  const isPayable  = document.getElementById('rm-payable-check')?.checked === true;
+  const totalCost  = parseFloat(document.getElementById('rm-field-cost').value) || 0;
 
-  const investorChecked = document.getElementById('rm-investor-check')?.checked && investorRecord;
-  const investorAmount  = investorChecked
-    ? (parseFloat(document.getElementById('rm-investor-amount').value) || 0)
-    : 0;
-  const investorNote    = investorChecked
+  const investorChecked = !isPayable
+    && document.getElementById('rm-investor-check')?.checked === true
+    && !!investorRecord;
+  const investorNote = investorChecked
     ? (document.getElementById('rm-investor-note').value.trim())
     : '';
 
+  let creditorType  = null;
+  let creditorId    = null;
+  let payableStatus = 'unpaid';
+  let dueDate       = null;
+  let paidAmount    = 0;
+
+  if (isPayable) {
+    creditorType  = document.querySelector('input[name="rm-creditor-type"]:checked')?.value || null;
+    creditorId    = document.getElementById('rm-creditor-id')?.value || null;
+    payableStatus = document.getElementById('rm-payable-status')?.value || 'unpaid';
+    dueDate       = document.getElementById('rm-due-date')?.value || null;
+    paidAmount    = parseFloat(document.getElementById('rm-paid-amount')?.value) || 0;
+    if (payableStatus === 'paid')   paidAmount = totalCost;
+    if (payableStatus === 'unpaid') paidAmount = 0;
+  }
+
   return {
-    date:         document.getElementById('rm-field-date').value,
-    materialType: type,
-    supplierId:   document.getElementById('rm-field-supplier').value,
-    weightLbs:    parseFloat(document.getElementById('rm-field-weight').value)   || 0,
-    totalCost:    parseFloat(document.getElementById('rm-field-cost').value)     || 0,
+    date:            document.getElementById('rm-field-date').value,
+    materialType:    type,
+    supplierId:      document.getElementById('rm-field-supplier').value,
+    weightLbs:       parseFloat(document.getElementById('rm-field-weight').value)   || 0,
+    totalCost,
     // Recycled-only fields — always present in the record, default 0 for pellet
     washedWeightLbs: isRecycled
       ? (parseFloat(document.getElementById('rm-field-washed-weight').value) || 0)
@@ -2344,8 +2509,11 @@ function collectFormData() {
     washingCost: isRecycled
       ? (parseFloat(document.getElementById('rm-field-washing-cost').value) || 0)
       : 0,
-    // Investor financing (stored in extra JSONB column)
-    investorFinancing: investorChecked ? { amount: investorAmount, note: investorNote } : null,
+    // AP fields
+    isPayable, creditorType, creditorId, payableStatus, dueDate, paidAmount,
+    // Investor fields (transient — used by handleFormSubmit only)
+    investorChecked,
+    investorNote,
   };
 }
 
