@@ -122,6 +122,14 @@ const ROUTES = {
     },
   },
 
+  'investor-payouts': {
+    title: 'Entregas a Borbón — CapFlow',
+    loader: async (container) => {
+      const { mountInvestorPayouts } = await import('./modules/investor-payouts.js');
+      await mountInvestorPayouts(container);
+    },
+  },
+
   expenses: {
     title: 'Gastos — CapFlow',
     loader: async (container) => {

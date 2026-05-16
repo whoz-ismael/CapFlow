@@ -9,13 +9,20 @@
  *   • Safe edit (delta re-balance) and delete (full stock return)
  *   • Accounts Receivable (AR) — payment tracking per sale via SalePaymentsAPI
  *
- * Investor pricing (auto-applied when selected client is the investor):
- *   • RD$100/pkg benefit discount on every manufactured line (always)
- *   • RD$100/pkg debt paydown on manufactured lines while debt > 0
- *   • On create: InvestorAPI.setSaleAmortization records the paydown
- *   • On edit:   setSaleAmortization reconciles old vs new amount
- *   • On delete: clearSaleAmortization reverses the paydown
- *   History is never deleted — every adjustment is auditable.
+ * Universal Investor Cut (applies to EVERY manufactured-cap sale):
+ *   • RD$100/pkg amortizes investor (Borbón) debt — recorded in
+ *     investor.history with referenceId=sale.id; reduces total_debt.
+ *   • RD$100/pkg is owed to Borbón as a "benefit" (paid later, tracked
+ *     in the investor_payouts table — module "Entregas a Borbón").
+ *   • For sales NOT to Borbón, an additional resale margin
+ *     (unitPrice − 735, clamped ≥ 0) is added to the payout row.
+ *   • For Borbón sales (client = investor): the per-package price the
+ *     factory bills is discounted by RD$200 (100 benefit + 100
+ *     amortization) and NO payout row is created.
+ *   All amortization + payout side-effects are emitted automatically
+ *   inside SalesAPI.create / update / remove / confirmWithInventoryDebit
+ *   via api.js → _syncSaleInvestorState. This module no longer calls
+ *   InvestorAPI directly for amortizations.
  *
  * Inventory rules:
  *   CREATE  → removeStock per manufactured line
@@ -45,18 +52,22 @@ import { InvestorAPI }                from '../api.js';
 import { SalePaymentsAPI }            from '../api.js';
 import { nextInvoiceNumber }          from '../api.js';
 import { ChangeHistoryAPI }           from '../api.js';
+import {
+  INVESTOR_AMORTIZATION_PER_PKG,
+  INVESTOR_BENEFIT_PER_PKG,
+}                                     from '../api.js';
 import { AuthAPI }                    from '../auth.js';
 
 /** Usuario admin actual para registrar en el historial. */
 let _currentAdmin = { id: null, name: 'Sistema' };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
+//
+// All monetary constants for the universal-investor-cut rule are imported
+// from api.js (single source of truth). The local INVESTOR_PAYDOWN_PER_PKG
+// alias is kept for naming consistency with prior code.
 
-/** Fixed RD$ discount applied per manufactured package as investor benefit. */
-const INVESTOR_BENEFIT_PER_PKG = 100;
-
-/** Fixed RD$ debt paydown per manufactured package (while debt > 0). */
-const INVESTOR_PAYDOWN_PER_PKG = 100;
+const INVESTOR_PAYDOWN_PER_PKG = INVESTOR_AMORTIZATION_PER_PKG;
 
 /** Payment methods available in the AR form. */
 const PAYMENT_METHODS = [
@@ -188,10 +199,10 @@ function buildShellHTML() {
           <span class="sales-investor-banner__icon">◇</span>
           <div class="sales-investor-banner__body">
             <strong>Precio inversionista activo</strong> —
-            RD$${INVESTOR_BENEFIT_PER_PKG}/paquete (descuento beneficio fijo) +
-            RD$${INVESTOR_PAYDOWN_PER_PKG}/paquete adicional como pago a deuda
-            mientras haya saldo pendiente.
-            Aplica únicamente a productos <em>manufacturados</em>.
+            RD$${INVESTOR_BENEFIT_PER_PKG}/paquete (descuento beneficio) +
+            RD$${INVESTOR_PAYDOWN_PER_PKG}/paquete (amortización de deuda).
+            Aplica a cada paquete <em>manufacturado</em>; el corte universal
+            registra ambos automáticamente.
             <span id="sales-investor-debt-hint" class="sales-investor-debt-hint"></span>
           </div>
         </div>
@@ -609,22 +620,29 @@ function refreshInvestorBanner() {
 }
 
 /**
- * Compute investor adjustments for a set of enriched lines.
- * Returns adjusted lines and totals.
+ * Compute investor (Borbón) adjustments for a set of enriched lines.
+ *
+ * Universal-investor-cut rule: every manufactured package sold to Borbón
+ * always discounts RD$100 (benefit) + RD$100 (amortization) = RD$200/pkg,
+ * regardless of remaining debt. The full RD$100/pkg amortization is
+ * recorded against investor.total_debt at sale persistence time
+ * (SalesAPI._syncSaleInvestorState) — see api.js.
+ *
+ * @param {Array} enrichedLines  lines with lineRevenue/lineCost computed
+ * @param {number} _currentDebt   unused (kept for backwards-compat signature)
+ * @returns {{ adjustedLines:Array, benefitDiscountTotal:number, amortizationTotal:number }}
  */
-function computeInvestorAdjustments(enrichedLines, currentDebt) {
-  let remainingDebt        = currentDebt;
+function computeInvestorAdjustments(enrichedLines, _currentDebt) {
   let benefitDiscountTotal = 0;
   let amortizationTotal    = 0;
 
   const adjustedLines = enrichedLines.map(line => {
     if (line.productType !== 'manufactured') return line;
 
-    const benefitDiscount  = INVESTOR_BENEFIT_PER_PKG * line.quantity;
-    const paydownDiscount  = Math.min(INVESTOR_PAYDOWN_PER_PKG * line.quantity, remainingDebt);
-    remainingDebt         -= paydownDiscount;
-    benefitDiscountTotal  += benefitDiscount;
-    amortizationTotal     += paydownDiscount;
+    const benefitDiscount = INVESTOR_BENEFIT_PER_PKG * line.quantity;
+    const paydownDiscount = INVESTOR_PAYDOWN_PER_PKG * line.quantity;
+    benefitDiscountTotal += benefitDiscount;
+    amortizationTotal    += paydownDiscount;
 
     const totalDiscount  = benefitDiscount + paydownDiscount;
     const adjRevenue     = Math.max(0, line.lineRevenue - totalDiscount);
@@ -1060,8 +1078,6 @@ async function handleFormSubmit(e) {
 
     if (editingSale) {
       // ── EDIT PATH ─────────────────────────────────────────────────────────
-      const wasInvestor = isInvestorSale(editingSale.clientId);
-
       // Delta inventory for manufactured lines
       const oldLines    = editingSale.lines || [];
       const oldLineMap  = new Map(
@@ -1089,20 +1105,9 @@ async function handleFormSubmit(e) {
         }
       }
 
+      // SalesAPI.update internally syncs investor amortization +
+      // investor_payouts row via the universal-investor-cut helper.
       await SalesAPI.update(editingSale.id, payload);
-
-      if (investorSale && amortizationTotal > 0) {
-        await InvestorAPI.setSaleAmortization(
-          editingSale.id,
-          amortizationTotal,
-          `Amortización automática${invoiceNumber ? ' — ' + invoiceNumber : ''}`
-        );
-      } else if (wasInvestor) {
-        await InvestorAPI.clearSaleAmortization(
-          editingSale.id,
-          'Cliente cambiado; amortización revertida'
-        );
-      }
 
       const editCustomer = customerMap.get(String(payload.clientId));
       ChangeHistoryAPI.log({
@@ -1139,18 +1144,12 @@ async function handleFormSubmit(e) {
 
       // Atomic: INSERT sale + debit inventory for every manufactured line
       // inside a single Postgres transaction. Failure rolls everything back.
+      // SalesAPI internally syncs investor amortization + investor_payouts row
+      // via the universal-investor-cut helper.
       const newSale = await SalesAPI.createWithInventoryDebit(
         payload,
         `Venta${invoiceNumber ? ' — ' + invoiceNumber : ''}`
       );
-
-      if (investorSale && amortizationTotal > 0) {
-        await InvestorAPI.setSaleAmortization(
-          newSale.id,
-          amortizationTotal,
-          `Amortización automática${invoiceNumber ? ' — ' + invoiceNumber : ' — ' + newSale.id}`
-        );
-      }
 
       const newCustomer = customerMap.get(String(payload.clientId));
       ChangeHistoryAPI.log({
@@ -1299,16 +1298,12 @@ function handleDelete(saleId) {
           'Reverso por eliminación de venta');
       }
 
-      // Reverse investor amortization
-      const hadAmort = (sale.investor?.amortizationTotal || 0) > 0;
-      const wasInv   = isInvestorSale(sale.clientId);
-      if (hadAmort || wasInv) {
-        await InvestorAPI.clearSaleAmortization(saleId, 'Reversión por eliminación de venta');
-      }
-
       // Remove payments for this sale
       await SalePaymentsAPI.removeBySaleId(saleId);
 
+      // SalesAPI.remove appends a reversal entry to investor.history
+      // (restoring total_debt) and the investor_payouts row is removed
+      // via the ON DELETE CASCADE foreign key.
       await SalesAPI.remove(saleId);
       ChangeHistoryAPI.log({
         entity_type: 'sale', entity_id: saleId,

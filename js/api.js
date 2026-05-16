@@ -854,7 +854,9 @@ export const SalesAPI = {
     };
     const { data, error } = await _sb.from('sales').insert(row).select().single();
     if (error) throw new Error(error.message);
-    return _saleFromDb(data);
+    const sale = _saleFromDb(data);
+    await _syncSaleInvestorState(sale);
+    return sale;
   },
 
   async update(id, d) {
@@ -886,10 +888,21 @@ export const SalesAPI = {
     const { data, error } = await _sb.from('sales').update(u)
       .eq('id', String(id)).select().single();
     if (error) throw new Error(error.message);
-    return _saleFromDb(data);
+    const sale = _saleFromDb(data);
+    await _syncSaleInvestorState(sale);
+    return sale;
   },
 
   async remove(id) {
+    // Append a reversal entry to investor.history that restores totalDebt.
+    // The investor_payouts row is removed by FK cascade (ON DELETE CASCADE).
+    try {
+      await InvestorAPI.clearSaleAmortization(
+        String(id), `Reverso por eliminación de venta ${id}`
+      );
+    } catch (err) {
+      console.warn('[CapFlow] clearSaleAmortization on remove:', err.message);
+    }
     const { error } = await _sb.from('sales').delete().eq('id', String(id));
     if (error) throw new Error(error.message);
     return null;
@@ -921,7 +934,9 @@ export const SalesAPI = {
       p_note:    note,
     });
     if (error) throw new Error(error.message);
-    return _saleFromDb(Array.isArray(data) ? data[0] : data);
+    const sale = _saleFromDb(Array.isArray(data) ? data[0] : data);
+    await _syncSaleInvestorState(sale);
+    return sale;
   },
 
   /**
@@ -963,7 +978,9 @@ export const SalesAPI = {
       p_note: note,
     });
     if (error) throw new Error(error.message);
-    return _saleFromDb(Array.isArray(data) ? data[0] : data);
+    const sale = _saleFromDb(Array.isArray(data) ? data[0] : data);
+    await _syncSaleInvestorState(sale);
+    return sale;
   },
 };
 
@@ -1082,6 +1099,195 @@ export const SaleLinesAPI = {
     return { deleted: count };
   },
 };
+
+
+// =============================================================================
+// INVESTOR PAYOUTS  (Entregas a Borbón)
+//
+// One row per confirmed manufactured-bearing sale to a NON-Borbón customer.
+// Tracks the cash the factory still owes Borbón (RD$100/pkg benefit +
+// resale margin above RD$735/pkg). The RD$100/pkg amortization is NOT
+// reflected here — it lives in investor.history and reduces total_debt
+// at sale creation/confirmation time.
+//
+// DB: id, sale_id, sale_date, packages_total, benefit_total, margin_total,
+//     total_owed (generated), status, delivered_at, delivered_note,
+//     created_at, updated_at
+// JS: same names in camelCase
+// =============================================================================
+
+/** RD$ constants — single source of truth for the universal investor cut. */
+export const INVESTOR_AMORTIZATION_PER_PKG = 100;
+export const INVESTOR_BENEFIT_PER_PKG      = 100;
+export const WHOLESALE_PRICE_PER_PKG       = 735;
+
+function _payoutFromDb(r) {
+  return {
+    id:             r.id,
+    saleId:         r.sale_id,
+    saleDate:       r.sale_date,
+    packagesTotal:  Number(r.packages_total) || 0,
+    benefitTotal:   Number(r.benefit_total)  || 0,
+    marginTotal:    Number(r.margin_total)   || 0,
+    totalOwed:      Number(r.total_owed)     || 0,
+    status:         r.status || 'pending',
+    deliveredAt:    r.delivered_at,
+    deliveredNote:  r.delivered_note,
+    createdAt:      r.created_at,
+    updatedAt:      r.updated_at,
+  };
+}
+
+function _payoutToDb(d) {
+  const row = {};
+  if (d.saleId         !== undefined) row.sale_id         = String(d.saleId);
+  if (d.saleDate       !== undefined) row.sale_date       = d.saleDate;
+  if (d.packagesTotal  !== undefined) row.packages_total  = Number(d.packagesTotal) || 0;
+  if (d.benefitTotal   !== undefined) row.benefit_total   = Number(d.benefitTotal)  || 0;
+  if (d.marginTotal    !== undefined) row.margin_total    = Number(d.marginTotal)   || 0;
+  if (d.status         !== undefined) row.status          = d.status;
+  if (d.deliveredAt    !== undefined) row.delivered_at    = d.deliveredAt;
+  if (d.deliveredNote  !== undefined) row.delivered_note  = d.deliveredNote;
+  return row;
+}
+
+export const InvestorPayoutsAPI = {
+  async list({ status, dateFrom, dateTo } = {}) {
+    let q = _sb.from('investor_payouts').select('*')
+      .order('sale_date', { ascending: false });
+    if (status)   q = q.eq('status', status);
+    if (dateFrom) q = q.gte('sale_date', dateFrom);
+    if (dateTo)   q = q.lte('sale_date', dateTo);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return (data || []).map(_payoutFromDb);
+  },
+
+  async getBySaleId(saleId) {
+    const { data, error } = await _sb.from('investor_payouts').select('*')
+      .eq('sale_id', String(saleId)).maybeSingle();
+    if (error) throw new Error(error.message);
+    return data ? _payoutFromDb(data) : null;
+  },
+
+  async markDelivered(id, { deliveredAt, deliveredNote } = {}) {
+    const u = {
+      status:         'delivered',
+      delivered_at:   deliveredAt || new Date().toISOString(),
+      delivered_note: deliveredNote || null,
+      updated_at:     new Date().toISOString(),
+    };
+    const { data, error } = await _sb.from('investor_payouts').update(u)
+      .eq('id', String(id)).select().single();
+    if (error) throw new Error(error.message);
+    return _payoutFromDb(data);
+  },
+
+  async revertDelivery(id) {
+    const u = {
+      status:         'pending',
+      delivered_at:   null,
+      delivered_note: null,
+      updated_at:     new Date().toISOString(),
+    };
+    const { data, error } = await _sb.from('investor_payouts').update(u)
+      .eq('id', String(id)).select().single();
+    if (error) throw new Error(error.message);
+    return _payoutFromDb(data);
+  },
+
+  /** Internal: upsert a payout row for a sale (used by the universal sync helper). */
+  async _upsertForSale({ saleId, saleDate, packagesTotal, benefitTotal, marginTotal }) {
+    const existing = await this.getBySaleId(saleId);
+    if (existing) {
+      const u = _payoutToDb({ saleDate, packagesTotal, benefitTotal, marginTotal });
+      u.updated_at = new Date().toISOString();
+      const { data, error } = await _sb.from('investor_payouts').update(u)
+        .eq('id', existing.id).select().single();
+      if (error) throw new Error(error.message);
+      return _payoutFromDb(data);
+    }
+    const row = _payoutToDb({ saleId, saleDate, packagesTotal, benefitTotal, marginTotal });
+    row.id     = _genId('pay');
+    row.status = 'pending';
+    const { data, error } = await _sb.from('investor_payouts').insert(row).select().single();
+    if (error) throw new Error(error.message);
+    return _payoutFromDb(data);
+  },
+
+  /** Internal: hard-delete the payout row for a sale (used when sale becomes Borbón/non-manufactured). */
+  async _deleteBySaleId(saleId) {
+    const { error } = await _sb.from('investor_payouts').delete()
+      .eq('sale_id', String(saleId));
+    if (error) throw new Error(error.message);
+  },
+};
+
+
+/**
+ * Universal investor-cut sync for a single sale (status='confirmed').
+ *
+ * Per package of every manufactured line:
+ *   • RD$100 amortizes investor debt (always — even for non-Borbón sales)
+ *   • For non-Borbón sales, an investor_payouts row tracks the RD$100
+ *     pending benefit + the resale margin (unitPrice − 735, clamped >=0)
+ *
+ * If the sale is not confirmed, has no manufactured lines, or no investor
+ * record exists, this helper clears any prior amortization/payout for the
+ * sale. Idempotent: safe to call repeatedly with the same payload.
+ *
+ * @param {{ id:string, clientId:string, status:string, lines:Array,
+ *           saleDate:string, invoiceNumber:string }} sale
+ */
+async function _syncSaleInvestorState(sale) {
+  if (!sale || !sale.id) return;
+
+  const investor = await _investorRead();
+  if (!investor) return;
+
+  const isConfirmed = sale.status === 'confirmed';
+  const mfgLines = (sale.lines || []).filter(
+    l => l.productType === 'manufactured' && Number(l.quantity) > 0
+  );
+  const totalPkgs = mfgLines.reduce((s, l) => s + Number(l.quantity), 0);
+
+  if (!isConfirmed || totalPkgs <= 0) {
+    await InvestorAPI.setSaleAmortization(sale.id, 0,
+      `Sin paquetes manufacturados — ${sale.invoiceNumber || sale.id}`);
+    await InvestorPayoutsAPI._deleteBySaleId(sale.id);
+    return;
+  }
+
+  const totalAmort = totalPkgs * INVESTOR_AMORTIZATION_PER_PKG;
+  const saleDateMs = sale.saleDate
+    ? new Date(`${sale.saleDate}T12:00:00Z`).getTime()
+    : Date.now();
+  await InvestorAPI.setSaleAmortization(
+    sale.id, totalAmort,
+    `Venta ${sale.invoiceNumber || sale.id}`,
+    saleDateMs
+  );
+
+  const isBorbon = String(sale.clientId) === String(investor.clientId);
+  if (isBorbon) {
+    await InvestorPayoutsAPI._deleteBySaleId(sale.id);
+    return;
+  }
+
+  const benefitTotal = totalPkgs * INVESTOR_BENEFIT_PER_PKG;
+  const marginTotal  = mfgLines.reduce(
+    (s, l) => s + Math.max(0, Number(l.unitPrice) - WHOLESALE_PRICE_PER_PKG)
+                  * Number(l.quantity),
+    0
+  );
+  await InvestorPayoutsAPI._upsertForSale({
+    saleId:        sale.id,
+    saleDate:      sale.saleDate,
+    packagesTotal: totalPkgs,
+    benefitTotal,
+    marginTotal,
+  });
+}
 
 
 // =============================================================================
@@ -1245,9 +1451,6 @@ export const InvestorAPI = {
     if (!record) throw new Error('No existe un registro de inversionista.');
     const amt = Number(amount);
     if (!amt || amt <= 0) throw new Error('El monto de amortización debe ser mayor que cero.');
-    if (amt > record.totalDebt) throw new Error(
-      `El monto (${amt.toFixed(2)}) supera la deuda actual (${record.totalDebt.toFixed(2)}).`
-    );
     record.history.push({
       id: _genId('inv'), type: 'amortization', amount: amt,
       date: date ?? Date.now(), referenceId: referenceId ?? null, note: (note || '').trim(),
@@ -1273,31 +1476,105 @@ export const InvestorAPI = {
     }, 0);
   },
 
-  async setSaleAmortization(referenceId, targetAmount, note = '') {
+  /**
+   * Ensure there is exactly one amortization history entry for the given
+   * sale with the requested amount. Updates the existing entry in place
+   * when possible (preserving its id), inserts a new one if absent, or
+   * removes it when targetAmount === 0. Adjusts totalDebt for the delta.
+   *
+   * Used on sale create / edit while the sale is confirmed.
+   */
+  async setSaleAmortization(referenceId, targetAmount, note = '', date = null) {
     const record = await _investorRead();
     if (!record) throw new Error('No existe un registro de inversionista.');
-    const already = this._netAmortizationForSale(record, referenceId);
-    const target  = Math.max(0, Number(targetAmount) || 0);
-    const delta   = target - already;
-    if (Math.abs(delta) < 0.001) return record;
-    if (delta > 0) {
-      return this.addAmortization(delta, referenceId, note || `Auto amort: ${referenceId}`);
+    const target = Math.max(0, Number(targetAmount) || 0);
+    const idx = (record.history || []).findIndex(
+      e => e.type === 'amortization' && String(e.referenceId) === String(referenceId)
+    );
+    const existing = idx >= 0 ? record.history[idx] : null;
+
+    if (existing) {
+      if (target === 0) {
+        record.totalDebt += existing.amount;
+        record.history.splice(idx, 1);
+      } else if (Math.abs(target - existing.amount) >= 0.001 || note || date != null) {
+        record.totalDebt -= (target - existing.amount);
+        existing.amount = target;
+        if (note) existing.note = String(note).trim();
+        if (date != null) existing.date = date;
+      } else {
+        return record;
+      }
+    } else if (target > 0) {
+      record.history.push({
+        id: _genId('inv'), type: 'amortization', amount: target,
+        date: date ?? Date.now(), referenceId: String(referenceId),
+        note: (note || `Amortización: ${referenceId}`).trim(),
+      });
+      record.totalDebt -= target;
+    } else {
+      return record;
     }
-    const reversal = Math.abs(delta);
-    record.history.push({
-      id: _genId('inv'), type: 'reversal', amount: reversal,
-      date: Date.now(), referenceId: String(referenceId),
-      note: (note || `Reverso de amort.: ${referenceId}`).trim(),
-    });
-    record.totalDebt += reversal;
+
     await _investorWrite(record);
     return record;
   },
 
+  /**
+   * Reverse the amortization linked to a sale by appending a `reversal`
+   * history entry whose amount equals the net amortization still pending
+   * for that sale. The amortization entry itself is NOT removed — the
+   * reversal preserves the audit trail. Used on sale deletion.
+   */
   async clearSaleAmortization(referenceId, note = '') {
-    return this.setSaleAmortization(
-      referenceId, 0, note || `Reversión por eliminación: ${referenceId}`
-    );
+    const record = await _investorRead();
+    if (!record) throw new Error('No existe un registro de inversionista.');
+    const net = this._netAmortizationForSale(record, referenceId);
+    if (net <= 0.001) return record;
+    record.history.push({
+      id: _genId('inv'), type: 'reversal', amount: net,
+      date: Date.now(), referenceId: String(referenceId),
+      note: (note || `Reverso por eliminación: ${referenceId}`).trim(),
+    });
+    record.totalDebt += net;
+    await _investorWrite(record);
+    return record;
+  },
+
+  /** Update an amortization-type history entry in place; adjusts totalDebt for the delta. */
+  async updateAmortizationEntry(entryId, { amount, note, date } = {}) {
+    const record = await _investorRead();
+    if (!record) throw new Error('No existe un registro de inversionista.');
+    const entry = record.history.find(e => e.id === entryId);
+    if (!entry) throw new Error(`Entrada de historial no encontrada: ${entryId}`);
+    if (entry.type !== 'amortization') {
+      throw new Error('Solo entradas de tipo amortización se pueden editar así.');
+    }
+    if (amount !== undefined) {
+      const newAmt = Math.max(0, Number(amount) || 0);
+      record.totalDebt -= (newAmt - entry.amount);
+      entry.amount = newAmt;
+    }
+    if (note !== undefined) entry.note = String(note || '').trim();
+    if (date !== undefined) entry.date = date;
+    await _investorWrite(record);
+    return record;
+  },
+
+  /** Remove an amortization-type history entry; restores totalDebt by its amount. */
+  async deleteAmortizationEntry(entryId) {
+    const record = await _investorRead();
+    if (!record) throw new Error('No existe un registro de inversionista.');
+    const idx = record.history.findIndex(e => e.id === entryId);
+    if (idx === -1) throw new Error(`Entrada de historial no encontrada: ${entryId}`);
+    const entry = record.history[idx];
+    if (entry.type !== 'amortization') {
+      throw new Error('Solo entradas de tipo amortización se pueden eliminar así.');
+    }
+    record.totalDebt += entry.amount;
+    record.history.splice(idx, 1);
+    await _investorWrite(record);
+    return record;
   },
 
   // ── Expense / Raw-material financing ────────────────────────────────────────
