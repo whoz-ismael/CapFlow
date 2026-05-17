@@ -18,10 +18,34 @@ es a Borbón:
 |-------------------------------|------------------------|----------------------------------------|
 | Amortización deuda            | RD$100                 | Reduce `investor.total_debt` al instante|
 | Beneficio físico a Borbón     | RD$100                 | Acumulado en `investor_payouts`        |
-| Margen reventa (no-Borbón)    | `max(unitPrice−735, 0)`| Acumulado en `investor_payouts`        |
+| Margen reventa (no-Borbón)    | `max(unitPrice−735, 0)`| Acumulado en `investor_payouts` (opt.) |
 
 Para ventas a Borbón el `investor_payouts` no se crea (Borbón ya recibió
 el beneficio como descuento en el precio).
+
+### Margen opcional por venta (migración 011)
+
+El margen de reventa es **opcional por venta**. La columna
+`investor_payouts.give_margin_to_investor` (default `true`) controla si
+el margen se incluye en `margin_total`. Cuando es `false`, `margin_total`
+es 0 y solo el beneficio (`benefit_total = pkgs × 100`) se le debe a
+Borbón. Los dos buckets de RD$100 (amortización y beneficio) siempre se
+aplican.
+
+El sale form muestra un toggle "Entregar margen de reventa a Borbón"
+solo cuando el cliente NO es Borbón y la venta tiene al menos una línea
+manufacturada. Default ON. El cambio se pasa a `SalesAPI.create/update`
+en `d.giveMargin`.
+
+### Ventas rechazadas (migración 011)
+
+`sales.status='rejected'` implica: NO existe amortización en
+`investor.history` con `referenceId = sale.id`, NO existe fila en
+`investor_payouts`. El sync helper revierte ambos lados al detectar
+rechazo (o cualquier transición a no-confirmed). `InvestorPayoutsAPI.list`
+filtra adicionalmente del lado servidor cualquier residuo legacy.
+Migración 011 hace un backfill que limpia y registra cada reversión en
+`change_history`.
 
 Las constantes viven en `js/api.js`:
 ```

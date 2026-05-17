@@ -49,6 +49,7 @@ import { ProductionAPI }              from '../api.js';
 import { RawMaterialsAPI }            from '../api.js';
 import { MonthlyInventoryAPI }        from '../api.js';
 import { InvestorAPI }                from '../api.js';
+import { InvestorPayoutsAPI }         from '../api.js';
 import { SalePaymentsAPI }            from '../api.js';
 import { nextInvoiceNumber }          from '../api.js';
 import { ChangeHistoryAPI }           from '../api.js';
@@ -205,6 +206,20 @@ function buildShellHTML() {
             registra ambos automáticamente.
             <span id="sales-investor-debt-hint" class="sales-investor-debt-hint"></span>
           </div>
+        </div>
+
+        <!-- Margin-to-Borbón toggle — visible only for non-Borbón sales with manufactured lines -->
+        <div id="sales-margin-toggle-wrap" class="sales-margin-toggle" style="display:none;">
+          <label class="sales-margin-toggle__label" for="sales-margin-toggle">
+            <input type="checkbox" id="sales-margin-toggle" checked>
+            <span class="sales-margin-toggle__text">
+              Entregar margen de reventa a Borbón
+            </span>
+            <span class="sales-margin-toggle__info"
+              title="Si está activo, la diferencia entre el precio cobrado al cliente y RD$735/paquete (precio mayorista) se incluye en lo que se le debe entregar a Borbón. El beneficio (RD$100) y la amortización (RD$100) por paquete siempre se aplican.">
+              ℹ
+            </span>
+          </label>
         </div>
 
         <!-- Line Items -->
@@ -617,6 +632,27 @@ function refreshInvestorBanner() {
       ? `Deuda actual: ${formatCurrency(debt)}`
       : 'Deuda saldada — solo aplica descuento beneficio.';
   }
+
+  refreshMarginToggleVisibility();
+}
+
+/**
+ * Show the "Entregar margen de reventa a Borbón" toggle only when the
+ * sale is to a non-Borbón customer AND has at least one manufactured line.
+ */
+function refreshMarginToggleVisibility() {
+  const wrap = document.getElementById('sales-margin-toggle-wrap');
+  if (!wrap) return;
+  const clientId = document.getElementById('sale-field-client')?.value || '';
+  if (!clientId || isInvestorSale(clientId)) {
+    wrap.style.display = 'none';
+    return;
+  }
+  const hasMfg = collectLines().some(l => {
+    const product = productMap.get(String(l.productId));
+    return product && product.type === 'manufactured';
+  });
+  wrap.style.display = hasMfg ? '' : 'none';
 }
 
 /**
@@ -1063,6 +1099,11 @@ async function handleFormSubmit(e) {
         : lines
     );
 
+    // The toggle is only meaningful for non-Borbón sales with manufactured
+    // lines. For Borbón sales or pure-resale sales the value is ignored
+    // downstream (no payout row gets created), so we still pass it through.
+    const giveMargin = document.getElementById('sales-margin-toggle')?.checked !== false;
+
     const payload = {
       saleDate,
       month,
@@ -1074,6 +1115,7 @@ async function handleFormSubmit(e) {
       lines,
       attachments:   currentAttachments,
       investor:      investorData,
+      giveMargin,
     };
 
     if (editingSale) {
@@ -1121,6 +1163,26 @@ async function handleFormSubmit(e) {
         },
         user_id: _currentAdmin.id, user_name: _currentAdmin.name,
       });
+
+      // Log toggle change separately when it actually flipped.
+      const priorGiveMargin = editingSale._priorGiveMargin;
+      if (priorGiveMargin !== undefined && priorGiveMargin !== giveMargin) {
+        try {
+          const refreshed = await InvestorPayoutsAPI.getBySaleId(editingSale.id);
+          ChangeHistoryAPI.log({
+            entity_type: 'investor_payout',
+            entity_id:   refreshed?.id ?? editingSale.id,
+            entity_name: `Venta ${invoiceNumber || editingSale.id}`,
+            action:      'editar',
+            changes: {
+              give_margin_to_investor: { before: priorGiveMargin, after: giveMargin },
+              margin_total:            { before: null, after: refreshed?.marginTotal ?? null },
+            },
+            user_id:   _currentAdmin.id,
+            user_name: _currentAdmin.name,
+          });
+        } catch { /* logging is best-effort */ }
+      }
 
       showFeedback('Venta actualizada correctamente.', 'success');
 
@@ -1186,7 +1248,7 @@ async function handleFormSubmit(e) {
 
 // ─── Edit ─────────────────────────────────────────────────────────────────────
 
-function handleEdit(saleId) {
+async function handleEdit(saleId) {
   const sale = allSales.find(s => String(s.id) === String(saleId));
   if (!sale) return;
 
@@ -1218,6 +1280,19 @@ function handleEdit(saleId) {
   renderAttachmentList();
   refreshInvestorBanner();
   updateTotalsPreview();
+
+  // Populate the margin toggle from the existing payout row, if any.
+  // Default is checked when there's no prior payout (= new behavior preserved).
+  try {
+    const priorPayout = await InvestorPayoutsAPI.getBySaleId(sale.id);
+    const toggle = document.getElementById('sales-margin-toggle');
+    if (toggle) {
+      toggle.checked = !priorPayout || priorPayout.giveMarginToInvestor !== false;
+    }
+    editingSale._priorGiveMargin = priorPayout
+      ? priorPayout.giveMarginToInvestor !== false
+      : true;
+  } catch { /* fall back to checked */ }
 
   document.getElementById('sales-form-title').innerHTML =
     '<span class="card__title-icon">✎</span> Editar Venta';
@@ -1334,6 +1409,9 @@ function resetForm() {
   document.getElementById('sale-field-date').value = todayString();
   document.getElementById('sales-lines-tbody').innerHTML = '';
   _lineSeq = 0;
+
+  const marginToggle = document.getElementById('sales-margin-toggle');
+  if (marginToggle) marginToggle.checked = true;
 
   renderAttachmentList();
   refreshInvestorBanner();
@@ -1554,6 +1632,8 @@ function updateTotalsPreview() {
         '−' + formatCurrency(amortizationTotal);
     }
   }
+
+  refreshMarginToggleVisibility();
 }
 
 // ─── Attachment Management ────────────────────────────────────────────────────
@@ -1886,6 +1966,26 @@ function injectStyles() {
     .sales-investor-debt-hint {
       display: inline-block; margin-left: var(--space-xs);
       font-weight: 600; color: var(--color-primary, #6c63ff);
+    }
+
+    .sales-margin-toggle {
+      margin: var(--space-sm) 0 var(--space-md);
+      padding: var(--space-sm) var(--space-md);
+      background: color-mix(in srgb, var(--color-warning, #f6ad55) 8%, transparent);
+      border: 1px solid color-mix(in srgb, var(--color-warning, #f6ad55) 35%, transparent);
+      border-radius: var(--radius-sm);
+    }
+    .sales-margin-toggle__label {
+      display: flex; align-items: center; gap: var(--space-sm);
+      font-size: 0.9rem; cursor: pointer; user-select: none;
+    }
+    .sales-margin-toggle__text { font-weight: 600; }
+    .sales-margin-toggle__info {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 1.25rem; height: 1.25rem; border-radius: 50%;
+      background: color-mix(in srgb, var(--color-warning, #f6ad55) 25%, transparent);
+      color: var(--color-warning, #c05621);
+      font-size: 0.8rem; cursor: help;
     }
 
     /* ── Investor badge in table ── */

@@ -855,7 +855,7 @@ export const SalesAPI = {
     const { data, error } = await _sb.from('sales').insert(row).select().single();
     if (error) throw new Error(error.message);
     const sale = _saleFromDb(data);
-    await _syncSaleInvestorState(sale);
+    await _syncSaleInvestorState(sale, { giveMargin: d.giveMargin });
     return sale;
   },
 
@@ -889,7 +889,7 @@ export const SalesAPI = {
       .eq('id', String(id)).select().single();
     if (error) throw new Error(error.message);
     const sale = _saleFromDb(data);
-    await _syncSaleInvestorState(sale);
+    await _syncSaleInvestorState(sale, { giveMargin: d.giveMargin });
     return sale;
   },
 
@@ -939,6 +939,11 @@ export const SalesAPI = {
     return sale;
   },
 
+  // NOTE: confirmWithInventoryDebit above does not receive giveMargin from the
+  // caller; the sync helper falls back to the existing payout's flag (or true
+  // for a brand-new payout), which is the right default for the
+  // pending→confirmed transition initiated from Ventas Pendientes.
+
   /**
    * Create a sale and debit finished-goods inventory atomically.
    * Wraps INSERT into sales + apply_inventory_movement for every manufactured
@@ -979,7 +984,7 @@ export const SalesAPI = {
     });
     if (error) throw new Error(error.message);
     const sale = _saleFromDb(Array.isArray(data) ? data[0] : data);
-    await _syncSaleInvestorState(sale);
+    await _syncSaleInvestorState(sale, { giveMargin: d.giveMargin });
     return sale;
   },
 };
@@ -1131,6 +1136,10 @@ function _payoutFromDb(r) {
     marginTotal:    Number(r.margin_total)   || 0,
     totalOwed:      Number(r.total_owed)     || 0,
     status:         r.status || 'pending',
+    giveMarginToInvestor:
+      r.give_margin_to_investor === undefined || r.give_margin_to_investor === null
+        ? true
+        : !!r.give_margin_to_investor,
     deliveredAt:    r.delivered_at,
     deliveredNote:  r.delivered_note,
     createdAt:      r.created_at,
@@ -1148,12 +1157,22 @@ function _payoutToDb(d) {
   if (d.status         !== undefined) row.status          = d.status;
   if (d.deliveredAt    !== undefined) row.delivered_at    = d.deliveredAt;
   if (d.deliveredNote  !== undefined) row.delivered_note  = d.deliveredNote;
+  if (d.giveMarginToInvestor !== undefined) {
+    row.give_margin_to_investor = !!d.giveMarginToInvestor;
+  }
   return row;
 }
 
 export const InvestorPayoutsAPI = {
+  /**
+   * List investor payouts. Excludes any payout whose underlying sale was
+   * rejected (sales.status='rejected') — defensive in addition to the
+   * application-side cleanup, in case of legacy rows.
+   */
   async list({ status, dateFrom, dateTo } = {}) {
-    let q = _sb.from('investor_payouts').select('*')
+    let q = _sb.from('investor_payouts')
+      .select('*, sales!inner(status)')
+      .neq('sales.status', 'rejected')
       .order('sale_date', { ascending: false });
     if (status)   q = q.eq('status', status);
     if (dateFrom) q = q.gte('sale_date', dateFrom);
@@ -1196,18 +1215,36 @@ export const InvestorPayoutsAPI = {
     return _payoutFromDb(data);
   },
 
-  /** Internal: upsert a payout row for a sale (used by the universal sync helper). */
-  async _upsertForSale({ saleId, saleDate, packagesTotal, benefitTotal, marginTotal }) {
+  /**
+   * Internal: upsert a payout row for a sale (used by the universal sync helper).
+   * `giveMarginToInvestor` is persisted; when false the caller should pass
+   * `marginTotal: 0` (the helper validates regardless and zeros it out).
+   */
+  async _upsertForSale({
+    saleId, saleDate, packagesTotal, benefitTotal, marginTotal,
+    giveMarginToInvestor,
+  }) {
+    const giveMargin = giveMarginToInvestor === undefined ? true : !!giveMarginToInvestor;
+    const safeMargin = giveMargin ? Number(marginTotal) || 0 : 0;
+
     const existing = await this.getBySaleId(saleId);
     if (existing) {
-      const u = _payoutToDb({ saleDate, packagesTotal, benefitTotal, marginTotal });
+      const u = _payoutToDb({
+        saleDate, packagesTotal, benefitTotal,
+        marginTotal: safeMargin,
+        giveMarginToInvestor: giveMargin,
+      });
       u.updated_at = new Date().toISOString();
       const { data, error } = await _sb.from('investor_payouts').update(u)
         .eq('id', existing.id).select().single();
       if (error) throw new Error(error.message);
       return _payoutFromDb(data);
     }
-    const row = _payoutToDb({ saleId, saleDate, packagesTotal, benefitTotal, marginTotal });
+    const row = _payoutToDb({
+      saleId, saleDate, packagesTotal, benefitTotal,
+      marginTotal: safeMargin,
+      giveMarginToInvestor: giveMargin,
+    });
     row.id     = _genId('pay');
     row.status = 'pending';
     const { data, error } = await _sb.from('investor_payouts').insert(row).select().single();
@@ -1230,16 +1267,21 @@ export const InvestorPayoutsAPI = {
  * Per package of every manufactured line:
  *   • RD$100 amortizes investor debt (always — even for non-Borbón sales)
  *   • For non-Borbón sales, an investor_payouts row tracks the RD$100
- *     pending benefit + the resale margin (unitPrice − 735, clamped >=0)
+ *     pending benefit + (optionally) the resale margin
+ *     (unitPrice − 735, clamped >=0)
  *
- * If the sale is not confirmed, has no manufactured lines, or no investor
- * record exists, this helper clears any prior amortization/payout for the
- * sale. Idempotent: safe to call repeatedly with the same payload.
+ * Rejected sales (status='rejected') or sales without manufactured lines
+ * have neither amortization nor a payout row — any prior residue is
+ * reversed here. Idempotent: safe to call repeatedly.
  *
  * @param {{ id:string, clientId:string, status:string, lines:Array,
  *           saleDate:string, invoiceNumber:string }} sale
+ * @param {{ giveMargin?:boolean }} [opts]
+ *        giveMargin: whether the resale margin counts toward Borbón's
+ *        payout row. If omitted, the prior value on the existing payout
+ *        row is preserved (default true if no row exists).
  */
-async function _syncSaleInvestorState(sale) {
+async function _syncSaleInvestorState(sale, opts = {}) {
   if (!sale || !sale.id) return;
 
   const investor = await _investorRead();
@@ -1250,11 +1292,54 @@ async function _syncSaleInvestorState(sale) {
     l => l.productType === 'manufactured' && Number(l.quantity) > 0
   );
   const totalPkgs = mfgLines.reduce((s, l) => s + Number(l.quantity), 0);
+  const invLabel  = sale.invoiceNumber || sale.id;
 
   if (!isConfirmed || totalPkgs <= 0) {
+    // Detect prior state before clearing so we can log meaningful reversals.
+    const priorAmort  = InvestorAPI._netAmortizationForSale(investor, sale.id);
+    const priorPayout = await InvestorPayoutsAPI.getBySaleId(sale.id);
+
     await InvestorAPI.setSaleAmortization(sale.id, 0,
-      `Sin paquetes manufacturados — ${sale.invoiceNumber || sale.id}`);
+      `Sin paquetes manufacturados — ${invLabel}`);
     await InvestorPayoutsAPI._deleteBySaleId(sale.id);
+
+    if (priorAmort > 0.001) {
+      await ChangeHistoryAPI.log({
+        entity_type: 'investor',
+        entity_id:   sale.id,
+        entity_name: `Venta ${invLabel}`,
+        action:      'revertir',
+        changes: {
+          amortizacion: { before: priorAmort, after: 0 },
+          motivo:       { before: null,
+                          after: sale.status === 'rejected'
+                            ? 'Venta rechazada — amortización revertida'
+                            : 'Sin paquetes manufacturados — amortización revertida' },
+        },
+        user_name: 'Sistema (sync investor)',
+        source:    'capflow',
+      });
+    }
+    if (priorPayout) {
+      await ChangeHistoryAPI.log({
+        entity_type: 'investor_payout',
+        entity_id:   priorPayout.id,
+        entity_name: `Venta ${invLabel}`,
+        action:      'eliminar',
+        changes: {
+          paquetes:  { before: priorPayout.packagesTotal, after: null },
+          beneficio: { before: priorPayout.benefitTotal,  after: null },
+          margen:    { before: priorPayout.marginTotal,   after: null },
+          total:     { before: priorPayout.totalOwed,     after: null },
+          motivo:    { before: null,
+                       after: sale.status === 'rejected'
+                         ? 'Venta rechazada — entrega pendiente eliminada'
+                         : 'Sin paquetes manufacturados — entrega pendiente eliminada' },
+        },
+        user_name: 'Sistema (sync investor)',
+        source:    'capflow',
+      });
+    }
     return;
   }
 
@@ -1264,7 +1349,7 @@ async function _syncSaleInvestorState(sale) {
     : Date.now();
   await InvestorAPI.setSaleAmortization(
     sale.id, totalAmort,
-    `Venta ${sale.invoiceNumber || sale.id}`,
+    `Venta ${invLabel}`,
     saleDateMs
   );
 
@@ -1274,18 +1359,31 @@ async function _syncSaleInvestorState(sale) {
     return;
   }
 
+  // Determine the giveMargin flag. Explicit caller value wins; otherwise
+  // preserve the prior payout's flag (default true if there's no prior).
+  let giveMargin;
+  if (opts.giveMargin !== undefined) {
+    giveMargin = !!opts.giveMargin;
+  } else {
+    const prior = await InvestorPayoutsAPI.getBySaleId(sale.id);
+    giveMargin = prior ? prior.giveMarginToInvestor !== false : true;
+  }
+
   const benefitTotal = totalPkgs * INVESTOR_BENEFIT_PER_PKG;
-  const marginTotal  = mfgLines.reduce(
-    (s, l) => s + Math.max(0, Number(l.unitPrice) - WHOLESALE_PRICE_PER_PKG)
-                  * Number(l.quantity),
-    0
-  );
+  const marginTotal  = giveMargin
+    ? mfgLines.reduce(
+        (s, l) => s + Math.max(0, Number(l.unitPrice) - WHOLESALE_PRICE_PER_PKG)
+                      * Number(l.quantity),
+        0
+      )
+    : 0;
   await InvestorPayoutsAPI._upsertForSale({
-    saleId:        sale.id,
-    saleDate:      sale.saleDate,
-    packagesTotal: totalPkgs,
+    saleId:               sale.id,
+    saleDate:             sale.saleDate,
+    packagesTotal:        totalPkgs,
     benefitTotal,
     marginTotal,
+    giveMarginToInvestor: giveMargin,
   });
 }
 
