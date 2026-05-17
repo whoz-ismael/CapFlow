@@ -38,6 +38,7 @@ import {
   CustomersAPI,
   ProductsAPI,
   ChangeHistoryAPI,
+  INVESTOR_AMORTIZATION_PER_PKG,
 } from '../api.js';
 import { AuthAPI } from '../auth.js';
 
@@ -90,19 +91,26 @@ function buildShellHTML() {
       <div class="module-header__badge" id="payouts-count-badge">— pagos</div>
     </header>
 
-    <!-- Summary cards -->
+    <!-- Summary cards (totales sobre los pagos pendientes) -->
     <div class="payouts-summary">
+      <div class="payouts-summary-card payouts-summary-card--revenue">
+        <span class="payouts-summary-card__label">Cobrado por operarios (pendientes)</span>
+        <span class="payouts-summary-card__value" id="payouts-stat-charged-total">RD$ 0.00</span>
+        <span class="payouts-summary-card__hint" id="payouts-stat-charged-hint">— paquetes</span>
+      </div>
+      <div class="payouts-summary-card payouts-summary-card--amort">
+        <span class="payouts-summary-card__label">Amortización aplicada (pendientes)</span>
+        <span class="payouts-summary-card__value" id="payouts-stat-amort-total">RD$ 0.00</span>
+        <span class="payouts-summary-card__hint">RD$100 / paquete</span>
+      </div>
       <div class="payouts-summary-card payouts-summary-card--pending">
-        <span class="payouts-summary-card__label">Total pendiente entregar</span>
+        <span class="payouts-summary-card__label">A entregar a Borbón (pendientes)</span>
         <span class="payouts-summary-card__value" id="payouts-stat-pending-total">RD$ 0.00</span>
+        <span class="payouts-summary-card__hint" id="payouts-stat-pending-count">0 pagos</span>
       </div>
       <div class="payouts-summary-card payouts-summary-card--delivered">
-        <span class="payouts-summary-card__label">Entregado en el mes actual</span>
+        <span class="payouts-summary-card__label">Entregado a Borbón este mes</span>
         <span class="payouts-summary-card__value" id="payouts-stat-delivered-month">RD$ 0.00</span>
-      </div>
-      <div class="payouts-summary-card">
-        <span class="payouts-summary-card__label"># pagos pendientes</span>
-        <span class="payouts-summary-card__value" id="payouts-stat-pending-count">0</span>
       </div>
     </div>
 
@@ -152,9 +160,10 @@ function buildShellHTML() {
               <th>Factura</th>
               <th>Cliente</th>
               <th class="text-right">Paquetes</th>
-              <th class="text-right">Beneficio</th>
-              <th class="text-right">Margen reventa</th>
-              <th class="text-right">Total pendiente</th>
+              <th class="text-right">Cobrado</th>
+              <th class="text-right">Amortización</th>
+              <th class="text-right">A Borbón</th>
+              <th class="text-right" title="Desglose de lo adeudado a Borbón">Beneficio · Margen</th>
               <th class="text-center">Estado</th>
               <th class="text-center">Acciones</th>
             </tr>
@@ -219,10 +228,14 @@ function populateCustomerFilter() {
 // ─── Summary cards ────────────────────────────────────────────────────────────
 
 function renderSummary() {
-  const pendingTotal = allPayouts
-    .filter(p => p.status === 'pending')
-    .reduce((s, p) => s + (p.totalOwed || 0), 0);
-  const pendingCount = allPayouts.filter(p => p.status === 'pending').length;
+  const pending = allPayouts.filter(p => p.status === 'pending');
+
+  const pendingTotal = pending.reduce((s, p) => s + (p.totalOwed || 0), 0);
+  const pendingPkgs  = pending.reduce((s, p) => s + (p.packagesTotal || 0), 0);
+  const pendingAmort = pendingPkgs * INVESTOR_AMORTIZATION_PER_PKG;
+  const pendingCharged = pending.reduce(
+    (s, p) => s + chargedForPayout(p), 0
+  );
 
   const monthKey = todayString().slice(0, 7);
   const deliveredMonth = allPayouts
@@ -230,9 +243,24 @@ function renderSummary() {
       && (p.deliveredAt || '').slice(0, 7) === monthKey)
     .reduce((s, p) => s + (p.totalOwed || 0), 0);
 
-  setText('payouts-stat-pending-total',  formatCurrency(pendingTotal));
-  setText('payouts-stat-delivered-month', formatCurrency(deliveredMonth));
-  setText('payouts-stat-pending-count',   String(pendingCount));
+  setText('payouts-stat-charged-total',    formatCurrency(pendingCharged));
+  setText('payouts-stat-charged-hint',     `${pendingPkgs} paquetes`);
+  setText('payouts-stat-amort-total',      formatCurrency(pendingAmort));
+  setText('payouts-stat-pending-total',    formatCurrency(pendingTotal));
+  setText('payouts-stat-pending-count',    `${pending.length} pagos`);
+  setText('payouts-stat-delivered-month',  formatCurrency(deliveredMonth));
+}
+
+// Sum unitPrice*quantity across manufactured lines of the payout's sale.
+function chargedForPayout(p) {
+  const sale = saleIndex.get(String(p.saleId));
+  if (!sale) return 0;
+  return (sale.lines || []).reduce((s, l) => {
+    if (l.productType !== 'manufactured') return s;
+    const qty = Number(l.quantity) || 0;
+    if (qty <= 0) return s;
+    return s + qty * (Number(l.unitPrice) || 0);
+  }, 0);
 }
 
 // ─── Filters + Table ──────────────────────────────────────────────────────────
@@ -339,15 +367,21 @@ function buildRow(p) {
          ▤ Ver venta
        </button>`;
 
+  const charged      = chargedForPayout(p);
+  const amortization = (p.packagesTotal || 0) * INVESTOR_AMORTIZATION_PER_PKG;
+
   return `
     <tr class="table-row">
       <td>${escapeHTML(formatDate(p.saleDate))}</td>
       <td>${escapeHTML(invNumber)}</td>
       <td>${customerName}</td>
       <td class="text-right">${p.packagesTotal}</td>
-      <td class="text-right">${formatCurrency(p.benefitTotal)}</td>
-      <td class="text-right">${formatCurrency(p.marginTotal)}</td>
-      <td class="text-right"><strong>${formatCurrency(p.totalOwed)}</strong></td>
+      <td class="text-right payouts-cell-emph">${formatCurrency(charged)}</td>
+      <td class="text-right payouts-cell-emph payouts-cell-amort">${formatCurrency(amortization)}</td>
+      <td class="text-right payouts-cell-emph payouts-cell-borbon">${formatCurrency(p.totalOwed)}</td>
+      <td class="text-right" style="font-size:0.82rem;color:var(--color-text-muted);white-space:nowrap;">
+        ${formatCurrency(p.benefitTotal)} · ${formatCurrency(p.marginTotal)}
+      </td>
       <td class="text-center">${statusBadge}</td>
       <td class="text-center" style="white-space:nowrap;">${actions}</td>
     </tr>
@@ -702,12 +736,26 @@ function injectStyles() {
     .payouts-summary-card__value {
       font-size: 1.4rem; font-weight: 700; color: var(--color-text);
     }
+    .payouts-summary-card__hint {
+      font-size: 0.72rem; color: var(--color-text-muted);
+      margin-top: 2px;
+    }
+    .payouts-summary-card--revenue {
+      border-left: 4px solid var(--color-primary, #6c63ff);
+    }
+    .payouts-summary-card--amort {
+      border-left: 4px solid var(--color-info, #4299e1);
+    }
     .payouts-summary-card--pending {
       border-left: 4px solid var(--color-warning, #f6ad55);
     }
     .payouts-summary-card--delivered {
       border-left: 4px solid var(--color-success, #38a169);
     }
+
+    .payouts-cell-emph { font-weight: 600; }
+    .payouts-cell-amort  { color: var(--color-info, #2b6cb0); }
+    .payouts-cell-borbon { color: var(--color-warning, #c05621); }
 
     .payouts-badge-pending {
       background: color-mix(in srgb, var(--color-warning, #f6ad55) 15%, transparent);
