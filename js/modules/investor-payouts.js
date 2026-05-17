@@ -749,6 +749,42 @@ function injectStyles() {
       text-transform: uppercase; letter-spacing: 0.04em;
     }
     .payouts-sale-totals strong { font-size: 1.1rem; }
+
+    /* Modal — duplicated from sales.js so this module is self-contained. */
+    .ar-modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0, 0, 0, 0.65);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 2000; padding: var(--space-md);
+    }
+    .ar-modal {
+      background: var(--color-bg-card, var(--color-surface));
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-lg);
+      width: 100%; max-width: 680px;
+      max-height: 90vh; overflow-y: auto;
+      display: flex; flex-direction: column;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.45);
+    }
+    .ar-modal__header {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      padding: var(--space-lg) var(--space-xl);
+      border-bottom: 1px solid var(--color-border);
+      gap: var(--space-md);
+    }
+    .ar-modal__title {
+      margin: 0; font-size: 1.05rem; font-weight: 700; color: var(--color-text);
+    }
+    .ar-modal__close {
+      background: none; border: none;
+      color: var(--color-text-muted); font-size: 1.15rem;
+      cursor: pointer; padding: 4px 8px; flex-shrink: 0;
+      border-radius: var(--radius-sm);
+      transition: background .15s, color .15s;
+    }
+    .ar-modal__close:hover {
+      background: var(--color-surface); color: var(--color-text);
+    }
   `;
   document.head.appendChild(tag);
 }
