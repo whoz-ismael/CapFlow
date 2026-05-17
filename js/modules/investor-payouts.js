@@ -119,6 +119,10 @@ function buildShellHTML() {
       <div class="card__header">
         <h2 class="card__title">
           <span class="card__title-icon">▤</span> Lista de entregas
+          <button type="button" class="payouts-info-btn" id="payouts-info-btn"
+            aria-label="¿Qué significa cada columna?" title="¿Qué significa cada columna?">
+            ℹ
+          </button>
         </h2>
         <div class="table-controls">
           <div class="select-wrapper">
@@ -162,8 +166,8 @@ function buildShellHTML() {
               <th class="text-right">Paquetes</th>
               <th class="text-right">Cobrado</th>
               <th class="text-right">Amortización</th>
-              <th class="text-right">A Borbón</th>
               <th class="text-right" title="Desglose de lo adeudado a Borbón">Beneficio · Margen</th>
+              <th class="text-right">A Borbón</th>
               <th class="text-center">Estado</th>
               <th class="text-center">Acciones</th>
             </tr>
@@ -279,6 +283,8 @@ function attachListeners() {
       searchQuery = (e.target.value || '').trim().toLowerCase();
       applyFilters();
     });
+  document.getElementById('payouts-info-btn')
+    ?.addEventListener('click', openColumnInfoModal);
 }
 
 function applyFilters() {
@@ -369,19 +375,26 @@ function buildRow(p) {
 
   const charged      = chargedForPayout(p);
   const amortization = (p.packagesTotal || 0) * INVESTOR_AMORTIZATION_PER_PKG;
+  const givesMargin  = p.giveMarginToInvestor !== false;
+  const marginCell   = givesMargin
+    ? formatCurrency(p.marginTotal)
+    : '<span title="El margen de reventa no se entrega a Borbón en esta venta.">—</span>';
+  const noMarginBadge = givesMargin
+    ? ''
+    : `<span class="badge payouts-badge-nomargen" title="Margen de reventa NO se entrega a Borbón en esta venta.">⊘ Sin margen</span> `;
 
   return `
     <tr class="table-row">
       <td>${escapeHTML(formatDate(p.saleDate))}</td>
       <td>${escapeHTML(invNumber)}</td>
-      <td>${customerName}</td>
+      <td>${noMarginBadge}${customerName}</td>
       <td class="text-right">${p.packagesTotal}</td>
       <td class="text-right payouts-cell-emph">${formatCurrency(charged)}</td>
       <td class="text-right payouts-cell-emph payouts-cell-amort">${formatCurrency(amortization)}</td>
-      <td class="text-right payouts-cell-emph payouts-cell-borbon">${formatCurrency(p.totalOwed)}</td>
       <td class="text-right" style="font-size:0.82rem;color:var(--color-text-muted);white-space:nowrap;">
-        ${formatCurrency(p.benefitTotal)} · ${formatCurrency(p.marginTotal)}
+        ${formatCurrency(p.benefitTotal)} · ${marginCell}
       </td>
+      <td class="text-right payouts-cell-emph payouts-cell-borbon">${formatCurrency(p.totalOwed)}</td>
       <td class="text-center">${statusBadge}</td>
       <td class="text-center" style="white-space:nowrap;">${actions}</td>
     </tr>
@@ -536,6 +549,77 @@ async function handleRevert(payoutId) {
   } catch (err) {
     showFeedback(`Error al revertir: ${err.message}`, 'error');
   }
+}
+
+// ─── Column Info Modal ────────────────────────────────────────────────────────
+
+const COLUMN_INFO = [
+  ['Fecha venta',     'Fecha en que se realizó la venta original.'],
+  ['Factura',         'Número de factura o despacho de la venta.'],
+  ['Cliente',         'Cliente al que se le vendió (siempre distinto a Borbón, ya que ventas a Borbón no generan entregas pendientes).'],
+  ['Paquetes',        'Cantidad de paquetes manufacturados incluidos en la venta.'],
+  ['Cobrado',         'Monto total que pagó el cliente por esos paquetes (precio público × paquetes).'],
+  ['Amortización',    'RD$100 por paquete que se restaron automáticamente de la deuda de Borbón el día de la venta. Este dinero no se le entrega físicamente, solo reduce la deuda en el módulo Inversor.'],
+  ['Beneficio · Margen', 'Desglose de lo que se le debe entregar a Borbón. Beneficio = RD$100 fijos por paquete (siempre). Margen = diferencia entre el precio cobrado y RD$735/paquete (solo si está activado entregar margen a Borbón en la venta).'],
+  ['A Borbón',        'Total que la fábrica debe entregarle físicamente a Borbón por esta venta (Beneficio + Margen). Equivale al total de la fila.'],
+  ['Estado',          'Pendiente significa que el dinero aún no se le ha entregado a Borbón. Entregado significa que ya se le entregó.'],
+  ['Acciones',        'Marcar entregado registra la entrega del dinero. Ver venta abre la venta original.'],
+];
+
+function openColumnInfoModal() {
+  document.getElementById('payouts-info-backdrop')?.remove();
+
+  const rowsHTML = COLUMN_INFO.map(([name, desc]) => `
+    <tr>
+      <th scope="row" class="payouts-info-table__name">${escapeHTML(name)}</th>
+      <td class="payouts-info-table__desc">${escapeHTML(desc)}</td>
+    </tr>
+  `).join('');
+
+  const backdrop = document.createElement('div');
+  backdrop.id        = 'payouts-info-backdrop';
+  backdrop.className = 'ar-modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="ar-modal" role="dialog" aria-modal="true" style="max-width:680px;">
+      <div class="ar-modal__header">
+        <h3 class="ar-modal__title">
+          <span style="color:var(--color-primary,#6c63ff);">ℹ</span>
+          ¿Qué significa cada columna?
+        </h3>
+        <button class="ar-modal__close" id="payouts-info-close" type="button">✕</button>
+      </div>
+
+      <div style="padding:var(--space-md) var(--space-lg);display:flex;flex-direction:column;gap:var(--space-md);">
+        <p class="payouts-info-intro">
+          Este módulo lleva el control del dinero que la fábrica le debe
+          entregar a Borbón por cada venta de paquetes manufacturados a
+          clientes que no son él. Cada paquete vendido genera RD$100 de
+          beneficio y, opcionalmente, el margen de reventa. La amortización
+          (RD$100 por paquete) ya se aplica automáticamente a la deuda y no
+          requiere entrega física.
+        </p>
+
+        <div class="table-wrapper">
+          <table class="data-table payouts-info-table">
+            <thead>
+              <tr><th>Columna</th><th>Significado</th></tr>
+            </thead>
+            <tbody>${rowsHTML}</tbody>
+          </table>
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;">
+          <button type="button" class="btn btn--primary btn--sm" id="payouts-info-ok">Entendido</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+
+  const close = () => backdrop.remove();
+  backdrop.addEventListener('click', e => { if (e.target === backdrop) close(); });
+  backdrop.querySelector('#payouts-info-close').addEventListener('click', close);
+  backdrop.querySelector('#payouts-info-ok').addEventListener('click', close);
 }
 
 function openSaleModal(saleId) {
@@ -766,6 +850,43 @@ function injectStyles() {
       background: color-mix(in srgb, var(--color-success, #38a169) 15%, transparent);
       color: var(--color-success, #2f855a);
       border: 1px solid color-mix(in srgb, var(--color-success, #38a169) 40%, transparent);
+    }
+    .payouts-badge-nomargen {
+      background: color-mix(in srgb, var(--color-text-muted, #718096) 15%, transparent);
+      color: var(--color-text, #4a5568);
+      border: 1px solid color-mix(in srgb, var(--color-text-muted, #718096) 35%, transparent);
+      font-size: 0.7rem; padding: 1px 5px; margin-right: 4px;
+    }
+
+    .payouts-info-btn {
+      background: none; border: 1px solid var(--color-border);
+      width: 1.5rem; height: 1.5rem; padding: 0; margin-left: var(--space-sm);
+      border-radius: 50%; cursor: pointer;
+      color: var(--color-primary, #6c63ff); font-size: 0.9rem;
+      display: inline-flex; align-items: center; justify-content: center;
+      transition: background .15s, transform .15s;
+    }
+    .payouts-info-btn:hover {
+      background: color-mix(in srgb, var(--color-primary, #6c63ff) 12%, transparent);
+      transform: scale(1.05);
+    }
+    .payouts-info-intro {
+      margin: 0; font-size: 0.875rem; line-height: 1.55;
+      color: var(--color-text-muted);
+      padding: var(--space-sm) var(--space-md);
+      background: var(--color-surface-secondary, var(--color-surface));
+      border-left: 3px solid var(--color-primary, #6c63ff);
+      border-radius: var(--radius-sm);
+    }
+    .payouts-info-table th, .payouts-info-table td {
+      vertical-align: top; line-height: 1.5;
+    }
+    .payouts-info-table__name {
+      font-weight: 700; white-space: nowrap;
+      color: var(--color-text);
+    }
+    .payouts-info-table__desc {
+      font-size: 0.875rem; color: var(--color-text-muted);
     }
 
     .payouts-sale-meta {
