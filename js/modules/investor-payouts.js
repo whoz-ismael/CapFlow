@@ -36,6 +36,7 @@ import {
   InvestorPayoutsAPI,
   SalesAPI,
   CustomersAPI,
+  ProductsAPI,
   ChangeHistoryAPI,
 } from '../api.js';
 import { AuthAPI } from '../auth.js';
@@ -48,6 +49,7 @@ let allSales        = [];
 let allCustomers    = [];
 let customerIndex   = new Map();
 let saleIndex       = new Map();
+let productIndex    = new Map();
 
 let filterStatus    = 'pending';
 let filterFrom      = '';
@@ -171,16 +173,18 @@ function buildShellHTML() {
 async function loadAll() {
   showTableLoading(true);
   try {
-    const [payouts, sales, customers] = await Promise.all([
+    const [payouts, sales, customers, products] = await Promise.all([
       InvestorPayoutsAPI.list(),
       SalesAPI.getAll(),
       CustomersAPI.getAll(),
+      ProductsAPI.getAll().catch(() => []),
     ]);
     allPayouts    = payouts;
     allSales      = sales;
     allCustomers  = customers;
     saleIndex     = new Map(sales.map(s => [String(s.id), s]));
     customerIndex = new Map(customers.map(c => [String(c.id), c]));
+    productIndex  = new Map(products.map(p => [String(p.id), p]));
 
     populateCustomerFilter();
     renderSummary();
@@ -303,7 +307,7 @@ function renderTable(rows) {
     btn.addEventListener('click', () => handleRevert(btn.dataset.id))
   );
   tbody.querySelectorAll('[data-action="view-sale"]').forEach(btn =>
-    btn.addEventListener('click', () => viewSale(btn.dataset.id))
+    btn.addEventListener('click', () => openSaleModal(btn.dataset.id))
   );
 }
 
@@ -500,13 +504,113 @@ async function handleRevert(payoutId) {
   }
 }
 
-function viewSale(saleId) {
+function openSaleModal(saleId) {
   const sale = saleIndex.get(String(saleId));
-  // Navigate to facturación module; user can filter by invoice manually.
-  if (sale?.invoiceNumber) {
-    sessionStorage.setItem('sales_focus_invoice', sale.invoiceNumber);
+  if (!sale) {
+    showFeedback('La venta original ya no existe.', 'error');
+    return;
   }
-  window.location.hash = '#invoicing';
+  document.getElementById('payouts-sale-backdrop')?.remove();
+
+  const customer    = customerIndex.get(String(sale.clientId));
+  const customerLbl = customer ? customer.name : `[Cliente ${sale.clientId}]`;
+  const invLabel    = sale.invoiceNumber || sale.id;
+  const lines       = Array.isArray(sale.lines) ? sale.lines : [];
+  const totals      = sale.totals || {};
+
+  const paymentLabel = sale.paymentMethod === 'transfer' ? 'Transferencia' : 'Efectivo';
+  const statusLabel  = ({
+    confirmed:      'Confirmada',
+    pending_review: 'Pendiente de revisión',
+    cancelled:      'Cancelada',
+  })[sale.status] || sale.status || '—';
+
+  const linesHTML = lines.length === 0
+    ? `<tr><td colspan="5" style="text-align:center;color:var(--color-text-muted);padding:var(--space-md);">Sin líneas.</td></tr>`
+    : lines.map(l => {
+        const prod    = productIndex.get(String(l.productId));
+        const name    = prod ? prod.name : `[Producto ${l.productId}]`;
+        const type    = l.productType === 'resale' ? 'Reventa' : 'Manufacturado';
+        const qty     = Number(l.quantity) || 0;
+        const price   = Number(l.unitPrice) || 0;
+        const subtot  = Number(l.lineRevenue ?? (qty * price));
+        return `
+          <tr>
+            <td>${escapeHTML(name)}</td>
+            <td><span class="badge ${l.productType === 'resale' ? 'payouts-badge-pending' : 'payouts-badge-delivered'}">${type}</span></td>
+            <td class="text-right">${qty}</td>
+            <td class="text-right">${formatCurrency(price)}</td>
+            <td class="text-right"><strong>${formatCurrency(subtot)}</strong></td>
+          </tr>
+        `;
+      }).join('');
+
+  const backdrop = document.createElement('div');
+  backdrop.id        = 'payouts-sale-backdrop';
+  backdrop.className = 'ar-modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="ar-modal" role="dialog" aria-modal="true" style="max-width:760px;">
+      <div class="ar-modal__header">
+        <h3 class="ar-modal__title">
+          <span style="color:var(--color-primary,#6c63ff);">▤</span>
+          Detalle de venta ${escapeHTML(invLabel)}
+        </h3>
+        <button class="ar-modal__close" id="payouts-sale-close" type="button">✕</button>
+      </div>
+
+      <div style="padding:var(--space-md) var(--space-lg);display:flex;flex-direction:column;gap:var(--space-md);">
+
+        <div class="payouts-sale-meta">
+          <div><span class="payouts-sale-meta__label">Fecha</span><span>${escapeHTML(formatDate(sale.saleDate))}</span></div>
+          <div><span class="payouts-sale-meta__label">Cliente</span><span>${escapeHTML(customerLbl)}</span></div>
+          <div><span class="payouts-sale-meta__label">Operario</span><span>${escapeHTML(sale.operatorName || '—')}</span></div>
+          <div><span class="payouts-sale-meta__label">Método de pago</span><span>${escapeHTML(paymentLabel)}</span></div>
+          <div><span class="payouts-sale-meta__label">Estado</span><span>${escapeHTML(statusLabel)}</span></div>
+          <div><span class="payouts-sale-meta__label">ID interno</span><span style="font-family:monospace;font-size:0.85em;">${escapeHTML(sale.id)}</span></div>
+        </div>
+
+        ${sale.notes ? `
+          <div style="font-size:0.875rem;padding:var(--space-sm) var(--space-md);
+            background:var(--color-surface-secondary,var(--color-surface));
+            border-left:3px solid var(--color-primary,#6c63ff);
+            border-radius:var(--radius-sm);">
+            <strong>Notas:</strong> ${escapeHTML(sale.notes)}
+          </div>
+        ` : ''}
+
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Tipo</th>
+                <th class="text-right">Cantidad</th>
+                <th class="text-right">P. unitario</th>
+                <th class="text-right">Subtotal</th>
+              </tr>
+            </thead>
+            <tbody>${linesHTML}</tbody>
+          </table>
+        </div>
+
+        <div class="payouts-sale-totals">
+          <div><span>Ingreso</span><strong>${formatCurrency(totals.revenue)}</strong></div>
+          <div><span>Costo</span><strong>${formatCurrency(totals.cost)}</strong></div>
+          <div><span>Utilidad</span><strong style="color:${Number(totals.profit) >= 0 ? 'var(--color-success,#38a169)' : 'var(--color-danger,#e53e3e)'};">${formatCurrency(totals.profit)}</strong></div>
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;">
+          <button type="button" class="btn btn--primary btn--sm" id="payouts-sale-ok">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+
+  const close = () => backdrop.remove();
+  backdrop.addEventListener('click', e => { if (e.target === backdrop) close(); });
+  backdrop.querySelector('#payouts-sale-close').addEventListener('click', close);
+  backdrop.querySelector('#payouts-sale-ok').addEventListener('click', close);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -615,6 +719,36 @@ function injectStyles() {
       color: var(--color-success, #2f855a);
       border: 1px solid color-mix(in srgb, var(--color-success, #38a169) 40%, transparent);
     }
+
+    .payouts-sale-meta {
+      display: grid; gap: var(--space-sm) var(--space-lg);
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      padding: var(--space-sm) var(--space-md);
+      background: var(--color-surface-secondary, var(--color-surface));
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-sm);
+    }
+    .payouts-sale-meta > div {
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .payouts-sale-meta__label {
+      font-size: 0.72rem; color: var(--color-text-muted);
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .payouts-sale-totals {
+      display: grid; gap: var(--space-md);
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      padding: var(--space-sm) var(--space-md);
+      border-top: 1px solid var(--color-border);
+    }
+    .payouts-sale-totals > div {
+      display: flex; flex-direction: column; gap: 2px; text-align: right;
+    }
+    .payouts-sale-totals span {
+      font-size: 0.78rem; color: var(--color-text-muted);
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .payouts-sale-totals strong { font-size: 1.1rem; }
   `;
   document.head.appendChild(tag);
 }
