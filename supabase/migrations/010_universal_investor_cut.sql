@@ -194,7 +194,7 @@ BEGIN
         VALUES (
           payout_id,
           sale_rec.id,
-          sale_rec.sale_date,
+          sale_rec.sale_date::date,
           sale_rec.pkg_total::integer,
           benefit_amount,
           margin_total,
