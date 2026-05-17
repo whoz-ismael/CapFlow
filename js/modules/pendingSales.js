@@ -432,21 +432,10 @@ async function _handleConfirm(saleId) {
       });
     }
 
-    // 4. Actualizar inversionista si aplica
-    if (sale.isInvestor && _investorRecord) {
-      const amortizationTotal = sale.totals?.investor?.amortizationTotal ?? 0;
-      if (amortizationTotal > 0) {
-        try {
-          await InvestorAPI.setSaleAmortization(
-            saleId,
-            amortizationTotal,
-            `Amortización — ${sale.invoiceNumber || saleId}`
-          );
-        } catch (invErr) {
-          console.warn('[PendingSales] Error actualizando inversionista:', invErr.message);
-        }
-      }
-    }
+    // 4. Inversionista + investor_payouts: SalesAPI.confirmWithInventoryDebit
+    //    ya emitió la amortización (RD$100/pkg) y, si la venta no es a Borbón,
+    //    el registro pendiente en investor_payouts. No hay nada más que hacer
+    //    aquí.
 
     // 5. Registrar en historial
     const customer = _customerMap.get(sale.clientId);
